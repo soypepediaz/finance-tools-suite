@@ -437,127 +437,211 @@ with tab_calc:
         """)
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 2: MOTOR DE BACKTESTING
+#  PESTAÑA 2: MOTOR DE BACKTESTING (VERSIÓN PRO RESTAURADA)
 # ------------------------------------------------------------------------------
 with tab_backtest:
-    st.markdown("### 📉 Validación Histórica")
+    st.markdown("### 📉 Validación Histórica (Strategy vs HODL)")
+    st.caption("Compara el rendimiento de la estrategia de Looping protegida contra simplemente haber comprado y mantenido (HODL).")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    # --- INPUTS ---
+    col_bt1, col_bt2, col_bt3 = st.columns(3)
+    with col_bt1:
         selected_asset_bt = st.selectbox("Seleccionar Activo Histórico", list(ASSET_MAP.keys()), key="sel_asset_bt")
         if ASSET_MAP[selected_asset_bt] == "MANUAL":
-            bt_ticker = st.text_input("Ticker Yahoo", value="DOT-USD", key="bt_t")
+            bt_ticker = st.text_input("Ticker Yahoo (ej: BTC-USD)", value="BTC-USD", key="bt_t")
         else:
             bt_ticker = ASSET_MAP[selected_asset_bt]
-        bt_capital = st.number_input("Capital Inicial ($)", value=10000.0, key="bt_cap")
+        bt_capital = st.number_input("Capital Inicial ($)", value=10000.0, key="bt_c")
     
-    with col2:
+    with col_bt2:
         bt_start_date = st.date_input("Fecha Inicio", value=date.today() - timedelta(days=365*2))
-        bt_leverage = st.slider("Apalancamiento Inicial", 1.1, 4.0, 2.0, 0.1, key="bt_lev")
+        bt_leverage = st.slider("Apalancamiento Inicial", 1.1, 4.0, 2.0, key="bt_lev")
     
-    with col3:
+    with col_bt3:
         bt_threshold = st.number_input("Umbral Defensa (%)", value=15.0, step=1.0, key="bt_th") / 100.0
         run_bt = st.button("🚀 Ejecutar Backtest", type="primary")
 
+    # --- LÓGICA ---
     if run_bt:
-        with st.spinner(f"Simulando {bt_ticker}..."):
+        with st.spinner(f"Descargando datos de {bt_ticker} y simulando escenarios..."):
             try:
+                # 1. Descarga de datos
                 df_hist = yf.download(bt_ticker, start=bt_start_date, end=date.today(), progress=False)
                 
                 if df_hist.empty:
-                    st.error("Sin datos.")
+                    st.error("No hay datos para este ticker/fechas.")
                     st.stop()
                 
+                # Limpieza de MultiIndex si existe
                 if isinstance(df_hist.columns, pd.MultiIndex):
                     df_hist.columns = df_hist.columns.get_level_values(0)
 
-                start_date_actual = df_hist.index[0].date()
+                # 2. Variables Iniciales (T0)
                 start_price = float(df_hist.iloc[0]['Close']) 
                 
-                # Variables iniciales
+                # Estrategia Looping
                 collateral_usd = bt_capital * bt_leverage
                 debt_usd = collateral_usd - bt_capital 
                 collateral_amt = collateral_usd / start_price 
+                # Usamos un LTV estándar (80%) para el backtest si no se define otro
+                ltv_sim = 0.80 
+                liq_price = debt_usd / (collateral_amt * ltv_sim)
                 
-                ltv_liq = c_ltv # Usamos el LTV de la pestaña 1
-                liq_price = debt_usd / (collateral_amt * ltv_liq)
-                target_ratio = liq_price / start_price 
+                # Estrategia HODL (Referencia)
+                hodl_amt = bt_capital / start_price
                 
+                # Variables de Bucle
                 history = []
+                defense_log = []
                 total_injected = 0.0
                 is_liquidated = False
                 
+                # 3. Bucle Día a Día
                 for date_idx, row in df_hist.iterrows():
                     if pd.isna(row['Close']): continue
                     
+                    # Precios del día
+                    open_val = float(row['Open'])
                     low_val = float(row['Low'])
                     close_val = float(row['Close'])
-                    open_val = float(row['Open'])
                     
                     trigger_price = liq_price * (1 + bt_threshold)
                     action = "Hold"
+                    defense_cost = 0.0
                     
+                    # A. Chequeo de Defensa / Liquidación
                     if low_val <= trigger_price and not is_liquidated:
-                        defense_price = min(float(row['Open']), trigger_price) 
+                        # Asumimos que defendemos al precio de apertura si el gap bajista fue fuerte,
+                        # o al trigger si fue intradía. Peor caso: Open.
+                        defense_exec_price = min(open_val, trigger_price)
                         
-                        if defense_price <= liq_price:
+                        # Si el precio de ejecución ya está por debajo de liquidación -> MUERTE
+                        if defense_exec_price <= liq_price:
                             is_liquidated = True
                             action = "LIQUIDATED ☠️"
                         else:
-                            # Defensa
-                            target_liq_new = defense_price * (liq_price / start_price)
-                            needed_collat_amt = debt_usd / (target_liq_new * ltv_liq)
+                            # Ejecutar Defensa: Restaurar ratio original
+                            # Nuevo Liq Objetivo para mantener la distancia relativa
+                            # Ratio original = Liq_Inicial / Precio_Inicial. 
+                            # Aquí simplificamos: Restaurar al mismo % de distancia que el trigger
+                            # Target Liq = Defense_Price / (1 + Threshold)
+                            
+                            # Lógica más simple: Queremos bajar el Liq Price.
+                            # ¿Cuánto? Digamos que queremos alejarlo otro 20%.
+                            target_liq_new = defense_exec_price * 0.80 # Alejamos un 20%
+                            
+                            # Cálculo de aporte necesario
+                            # Need_Col_Amt = Debt / (Target_Liq * LTV)
+                            needed_collat_amt = debt_usd / (target_liq_new * ltv_sim)
                             add_collat_amt = needed_collat_amt - collateral_amt
                             
                             if add_collat_amt > 0:
-                                total_injected += add_collat_amt * defense_price
+                                defense_cost = add_collat_amt * defense_exec_price
+                                total_injected += defense_cost
                                 collateral_amt += add_collat_amt
                                 liq_price = target_liq_new 
                                 action = "DEFENSA 🛡️"
+                                
+                                defense_log.append({
+                                    "Fecha": date_idx.strftime('%Y-%m-%d'),
+                                    "Precio Activo": f"${defense_exec_price:,.2f}",
+                                    "Inyección ($)": defense_cost,
+                                    "Nuevo Precio Liq": target_liq_new
+                                })
                     
-                    if low_val <= liq_price and not is_liquidated:
+                    # B. Chequeo Liquidación por mecha rápida
+                    if low_val <= liq_price:
                         is_liquidated = True
+                        action = "LIQUIDATED ☠️"
                         
+                    # C. Valoración Diaria
                     if not is_liquidated:
-                        pos_value = (collateral_amt * close_val) - debt_usd
+                        strat_value = (collateral_amt * close_val) - debt_usd
                     else:
-                        pos_value = 0
+                        strat_value = 0
                         
+                    hodl_value = hodl_amt * close_val
+                    total_invested = bt_capital + total_injected
+                    
                     history.append({
-                        "Fecha": date_idx, 
-                        "Acción": action, 
-                        "Liq Price": liq_price if not is_liquidated else 0,
-                        "Inversión Acumulada": bt_capital + total_injected, 
-                        "Valor Estrategia": pos_value if not is_liquidated else 0, 
-                        "Valor HODL": (bt_capital / start_price) * close_val 
+                        "Fecha": date_idx,
+                        "Precio": close_val,
+                        "Valor Estrategia": strat_value, 
+                        "Valor HODL": hodl_value,
+                        "Inversión Total": total_invested,
+                        "Acción": action
                     })
                     
                     if is_liquidated: break
                 
+                # 4. Resultados Finales
                 df_res = pd.DataFrame(history).set_index("Fecha")
+                final_val = df_res.iloc[-1]['Valor Estrategia']
+                final_invested = df_res.iloc[-1]['Inversión Total']
                 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Resultado", "LIQUIDADO" if is_liquidated else "VIVO")
-                c2.metric("Inyectado Total", f"${total_injected:,.0f}")
-                if not df_res.empty:
-                    c3.metric("Valor Final", f"${df_res.iloc[-1]['Valor Estrategia']:,.0f}")
+                profit = final_val - final_invested
+                roi = (profit / final_invested) * 100
                 
+                # Métricas HODL
+                hodl_final = df_res.iloc[-1]['Valor HODL']
+                hodl_profit = hodl_final - bt_capital
+                hodl_roi = (hodl_profit / bt_capital) * 100
+                
+                # --- VISUALIZACIÓN DE KPIS ---
+                st.divider()
+                k1, k2, k3, k4 = st.columns(4)
+                
+                k1.metric("Estado Final", "VIVO" if not is_liquidated else "LIQUIDADO", 
+                          delta="Sobrevivió" if not is_liquidated else "Rekt", 
+                          delta_color="normal" if not is_liquidated else "inverse")
+                
+                k2.metric("Capital Inyectado", f"${total_injected:,.0f}", help="Dinero extra añadido para no ser liquidado")
+                
+                k3.metric("Beneficio Neto (Estrategia)", f"${profit:,.0f}", delta=f"{roi:.2f}% ROI")
+                
+                k4.metric("Beneficio Neto (HODL)", f"${hodl_profit:,.0f}", delta=f"{hodl_roi:.2f}% ROI",
+                          help="Lo que hubieras ganado comprando y manteniendo sin hacer nada.")
+
+                # --- GRÁFICO COMPARATIVO ---
+                st.subheader("📈 Evolución del Patrimonio")
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Valor Estrategia"], name='Estrategia', fill='tozeroy', line=dict(color='green')))
-                fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Inversión Acumulada"], name='Inversión', line=dict(color='red', dash='dash')))
                 
-                events = df_res[df_res["Acción"].str.contains("DEFENSA", na=False)]
-                if not events.empty:
-                    fig.add_trace(go.Scatter(x=events.index, y=events["Valor Estrategia"], mode='markers', name='Defensa', marker=dict(color='orange', size=10, symbol='diamond')))
+                # Área Estrategia
+                fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Valor Estrategia"], 
+                                         name='Estrategia Looping', mode='lines', 
+                                         line=dict(color='#00CC96', width=2), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)'))
+                
+                # Línea HODL
+                fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Valor HODL"], 
+                                         name='Solo HODL', mode='lines', 
+                                         line=dict(color='#636EFA', width=2, dash='dot')))
+                
+                # Línea Coste (Inversión)
+                fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Inversión Total"], 
+                                         name='Dinero de tu Bolsillo', mode='lines', 
+                                         line=dict(color='#EF553B', width=1)))
+                
+                # Eventos de Defensa
+                defense_events = df_res[df_res["Acción"].str.contains("DEFENSA")]
+                if not defense_events.empty:
+                    fig.add_trace(go.Scatter(x=defense_events.index, y=defense_events["Valor Estrategia"],
+                                             mode='markers', name='Inyección Capital', 
+                                             marker=dict(color='orange', size=10, symbol='diamond')))
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.divider()
-                st.subheader("🏁 Datos de Entrada")
-                st.write(f"Inicio: {start_date_actual} | Precio Entrada: ${start_price:,.2f} | Deuda Inicial: ${debt_usd:,.0f}")
-
+                # --- DIARIO DE OPERACIONES ---
+                if defense_log:
+                    with st.expander("🛡️ Ver Diario de Defensas (Inyecciones de Capital)", expanded=True):
+                        st.dataframe(pd.DataFrame(defense_log).style.format({
+                            "Inyección ($)": "${:,.2f}", 
+                            "Nuevo Precio Liq": "${:,.2f}"
+                        }), use_container_width=True)
+                else:
+                    st.success("🎉 ¡Enhorabuena! La estrategia no necesitó ninguna defensa en este periodo.")
+                    
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error en el cálculo: {e}")
 
 # ------------------------------------------------------------------------------
 #  PESTAÑA 3: ESCÁNER REAL (MODO SEGURO + MEMORIA)
