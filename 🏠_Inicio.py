@@ -2,10 +2,10 @@ import streamlit as st
 
 # Configuración de la página: Colapsamos el menú lateral por defecto
 st.set_page_config(
-    page_title="Campamento DeFi Tools",
-    page_icon="🏕️",
+    page_title="Looping Master - Campamento DeFi",
+    page_icon="mascota.png", # <--- Pon aquí el nombre exacto de tu archivo
     layout="wide",
-    initial_sidebar_state="collapsed" 
+    initial_sidebar_state="expanded"
 )
 
 # CSS para ocultar marcas y limpiar
