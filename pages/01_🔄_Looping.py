@@ -27,9 +27,14 @@ hide_st_style = """
             
             /* Estilo para tarjetas */
             div[data-testid="column"] {
-                background-color: #f9f9f9;
-                border-radius: 10px;
+                padding: 10px;
+            }
+            
+            div[data-testid="stMetric"] {
+                background-color: #F0F2F6;
                 padding: 15px;
+                border-radius: 10px;
+                border: 1px solid #E0E0E0;
             }
             </style>
             """
@@ -38,25 +43,28 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 st.title("🛡️ Looping Master: Calculadora, Backtest & On-Chain")
 
 # ==============================================================================
-#  0. GESTIÓN DE SECRETOS (BLINDADA PARA RAILWAY)
+#  0. GESTIÓN DE SECRETOS (BLINDADA PARA RAILWAY/RENDER)
 # ==============================================================================
 def get_secret(key):
     """
-    Recupera una clave secreta de forma segura sin romper la app si falta el archivo.
-    Prioridad 1: Variables de Entorno (Railway).
-    Prioridad 2: Secrets TOML (Local).
+    Recupera una clave secreta de forma segura.
+    PRIORIDAD 1: Variables de Entorno (Railway/Render/Docker).
+    PRIORIDAD 2: Secrets TOML (Local/Streamlit Cloud).
     """
-    # 1. Primero intentamos leer del sistema (Railway) - Esto NO falla si no hay archivo
-    if key in os.environ:
-        return os.environ[key]
+    # 1. Intentar leer del sistema operativo (Railway usa esto)
+    # .get() devuelve None si no existe, NO da error.
+    env_val = os.environ.get(key)
+    if env_val is not None:
+        return env_val
     
-    # 2. Si no está, intentamos leer de st.secrets con protección
+    # 2. Si no está en el sistema, intentar leer de st.secrets con protección
     try:
         if key in st.secrets:
             return st.secrets[key]
-    except:
-        # Si st.secrets da error (porque no existe el archivo), devolvemos None silenciosamente
-        pass
+    except FileNotFoundError:
+        pass # No existe secrets.toml, ignoramos
+    except Exception:
+        pass # Cualquier otro error de Streamlit, ignoramos
         
     return None
 
@@ -72,19 +80,19 @@ def add_subscriber_moosend(name, email):
         api_key = get_secret("MOOSEND_API_KEY")
         
         if not api_key:
-            return False, "Falta configuración de API Key."
+            return False, "Falta configuración de API Key (MOOSEND_API_KEY)."
             
         url = f"https://api.moosend.com/v3/subscribers/{MOOSEND_LIST_ID}/subscribe.json?apikey={api_key}"
         
         headers = {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json', 
             'Accept': 'application/json'
         }
         
         payload = {
             "Name": name,
             "Email": email,
-            "HasExternalDoubleOptIn": False 
+            "HasExternalDoubleOptIn": False
         }
         
         response = requests.post(url, headers=headers, json=payload)
@@ -93,20 +101,16 @@ def add_subscriber_moosend(name, email):
             return True, "Success"
         else:
             try:
-                error_resp = response.json()
-                error_msg = error_resp.get("Error", "Unknown Error")
+                error_msg = response.json().get("Error", "Unknown Error")
             except:
                 error_msg = str(response.status_code)
             return False, error_msg
-            
     except Exception as e:
         return False, str(e)
 
 # ==============================================================================
 #  1. CONFIGURACIÓN DE REDES
 # ==============================================================================
-
-# Usamos el 'pool_provider' (AddressProvider) para encontrar siempre la dirección correcta del Pool
 NETWORKS = {
     "Base": {
         "chain_id": 8453,
@@ -140,7 +144,7 @@ NETWORKS = {
     }
 }
 
-# ABI LIGERO (Solo lo necesario para conectar y leer totales)
+# ABI LIGERO
 AAVE_ABI = [
     {
         "inputs": [],
@@ -165,7 +169,6 @@ AAVE_ABI = [
     }
 ]
 
-# Mapeo de activos para los selectores
 ASSET_MAP = {
     "Bitcoin (WBTC/BTC)": "BTC-USD", 
     "Ethereum (WETH/ETH)": "ETH-USD", 
@@ -177,29 +180,24 @@ ASSET_MAP = {
 }
 
 # ==============================================================================
-#  2. FUNCIONES AUXILIARES (CONEXIÓN ROBUSTA)
+#  2. FUNCIONES AUXILIARES
 # ==============================================================================
 
 def get_web3_session(rpc_url):
-    """Crea una sesión Web3 disfrazada de navegador Chrome"""
     s = requests.Session()
-    s.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    # Timeout de 60s
+    s.headers.update({'User-Agent': 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36'})
+    # Timeout de 60s para evitar cortes en redes congestionadas
     return Web3(Web3.HTTPProvider(rpc_url, session=s, request_kwargs={'timeout': 60}))
 
 def connect_robust(network_name):
-    """Intenta conectar rotando RPCs y priorizando Secrets"""
     config = NETWORKS[network_name]
-    rpcs = config["rpcs"][:] # Copia de la lista para no modificar la global
+    rpcs = config["rpcs"][:]
     
+    # Inyectar secreto de Railway/Streamlit usando get_secret
     secret_key = f"{network_name.upper()}_RPC_URL"
-    used_private = False
-    
-    # Inyectar secreto (Alchemy/Infura) usando get_secret
     private_rpc = get_secret(secret_key)
     
+    used_private = False
     if private_rpc:
         # Limpieza agresiva de comillas o espacios
         clean_rpc = private_rpc.strip().replace('"', '').replace("'", "")
@@ -210,7 +208,6 @@ def connect_robust(network_name):
         try:
             w3 = get_web3_session(rpc)
             if w3.is_connected():
-                # Verificación extra de Chain ID para asegurar que el nodo no miente
                 if w3.eth.chain_id == config["chain_id"]:
                     return w3, rpc, used_private
         except: 
@@ -219,7 +216,7 @@ def connect_robust(network_name):
     return None, None, False
 
 # ==============================================================================
-#  3. INTERFAZ DE USUARIO (PESTAÑAS)
+#  3. INTERFAZ DE USUARIO
 # ==============================================================================
 
 tab_home, tab_calc, tab_backtest, tab_onchain = st.tabs([
@@ -230,11 +227,10 @@ tab_home, tab_calc, tab_backtest, tab_onchain = st.tabs([
 ])
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 0: PORTADA & MARKETING
+#  PESTAÑA 0: PORTADA
 # ------------------------------------------------------------------------------
 with tab_home:
-    # --- HERO SECTION ---
-    col_hero_L, col_hero_R = st.columns([2, 1], gap="large")
+    col_hero_L, col_hero_R = st.columns([2, 1])
     
     with col_hero_L:
         st.markdown("# 🛡️ Domina el Looping en DeFi")
@@ -251,7 +247,7 @@ with tab_home:
         * 📡 **Escáner:** Audita tu cartera real en Blockchain y simula "Crash Tests".
         """)
         
-        st.info("👆 **Empieza ahora:** Navega por las pestañas superiores para usar las herramientas.")
+        st.info("💡 **Tip:** Navega por las pestañas superiores para usar las herramientas.")
 
     with col_hero_R:
         with st.container(border=True):
@@ -262,16 +258,16 @@ with tab_home:
 
     st.divider()
 
-    # --- LEAD MAGNET ---
-    st.markdown("### 🎓 Aprende a dominar estas estrategias")
+    # Lead Magnet
+    c_lead_L, c_lead_R = st.columns([1.5, 1])
     
-    col_lead_L, col_lead_R = st.columns([1.5, 1], gap="large")
-    
-    with col_lead_L:
+    with c_lead_L:
+        st.markdown("### 🎓 Aprende a dominar estas estrategias")
         st.markdown("""
-        Esta herramienta ha sido desarrollada por el equipo de **Campamento DeFi**.
-        
-        El *Looping Avanzado* es solo una de las múltiples estrategias que enseñamos para rentabilizar tus activos onchain de forma segura.
+        Esta herramienta es solo la punta del iceberg. En el **Campamento DeFi** compartimos:
+        - Estrategias de Yield Farming avanzadas.
+        - Alertas de seguridad y gestión de riesgo.
+        - Herramientas exclusivas para miembros.
         
         **¿Quieres conocer más en detalle otras estrategias como esta? Pues es muy fácil (3 pasos):**
         
@@ -279,24 +275,23 @@ with tab_home:
         
         **Paso 2.** 🚨 Revisa tu bandeja de entrada. Algunos gestores de correo se equivocan y nos meten en la carpeta de spam.
         
-        **Paso 3.** 🛠️ Te iremos informando de nuevas herramientas que vayamos desarrollando y cómo puedes sacarle el máximo partido entrando a la Membresía del Campamento.
+        **Paso 3.** 🛠️ Te iremos informando de nuevas herramientas.
         """)
-    
-    with col_lead_R:
+        
+    with c_lead_R:
         with st.container(border=True):
             st.markdown("#### 📩 Paso 1, aquí")
             with st.form("lead_magnet_form_home"):
                 name_input = st.text_input("Nombre", placeholder="Tu nombre")
                 email_input = st.text_input("Email", placeholder="tu@email.com")
                 
-                # Botón de acción principal
                 submitted = st.form_submit_button("¡Quiero aprender!", type="primary", use_container_width=True)
                 
                 if submitted:
                     if email_input and "@" in email_input:
                         with st.spinner("Enviando solicitud..."):
                             ok, msg = add_subscriber_moosend(name_input, email_input)
-                            
+                        
                         if ok:
                             st.success(f"¡Genial, {name_input}! Revisa tu correo ahora.")
                             st.balloons()
@@ -304,7 +299,7 @@ with tab_home:
                             st.error(f"Hubo un error técnico al suscribirte: {msg}")
                     else:
                         st.warning("Por favor, introduce un email válido.")
-
+    
     st.divider()
     st.caption("Desarrollado con ❤️ por el equipo de Campamento DeFi. DYOR.")
 
@@ -314,9 +309,9 @@ with tab_home:
 with tab_calc:
     st.markdown("### 🧮 Simulador Estático de Defensa")
     
-    col_input1, col_input2, col_input3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
     
-    with col_input1:
+    with col1:
         selected_asset_calc = st.selectbox("Seleccionar Activo", list(ASSET_MAP.keys()), key="sel_asset_c")
         if ASSET_MAP[selected_asset_calc] == "MANUAL":
             c_asset_name = st.text_input("Ticker", value="PEPE", key="c_asset_man")
@@ -326,11 +321,11 @@ with tab_calc:
         c_price = st.number_input(f"Precio Actual {c_asset_name} ($)", value=100000.0, step=100.0, key="c_price")
         c_target = st.number_input(f"Precio Objetivo ($)", value=130000.0, step=100.0, key="c_target")
         
-    with col_input2:
+    with col2:
         c_capital = st.number_input("Capital Inicial ($)", value=10000.0, step=1000.0, key="c_capital")
         c_leverage = st.slider("Apalancamiento (x)", 1.1, 5.0, 2.0, 0.1, key="c_lev")
         
-    with col_input3:
+    with col3:
         c_ltv = st.slider("LTV Liquidación (%)", 50, 95, 78, 1, key="c_ltv") / 100.0
         c_threshold = st.number_input("Umbral Defensa (%)", value=15.0, step=1.0, key="c_th") / 100.0
         c_zones = st.slider("Zonas de Defensa", 1, 10, 5, key="c_zones")
@@ -356,26 +351,18 @@ with tab_calc:
     cum_cost = 0.0
     
     for i in range(1, c_zones + 1):
-        # Precio al que salta la alarma
         trig_p = curr_liq * (1 + c_threshold)
-        
-        # Caída porcentual desde el precio actual
         drop_pct = (c_price - trig_p) / c_price
-        
-        # Nuevo precio objetivo de liquidación
         targ_liq = trig_p * c_target_ratio
         
         if targ_liq > 0:
-            # Cálculo de colateral necesario
             need_col = c_debt_usd / (targ_liq * c_ltv)
             add_col = need_col - curr_collat
         else:
             add_col = 0
             
-        if add_col < 0:
-            add_col = 0
-            
-        # Costo de la inyección
+        add_col = max(0, add_col)
+        
         cost = add_col * trig_p
         cum_cost += cost
         curr_collat += add_col
@@ -415,11 +402,9 @@ with tab_calc:
         })
         curr_liq = targ_liq
 
-    df_calc = pd.DataFrame(cascade_data)
-    
     st.divider()
     st.dataframe(
-        df_calc.style.format({
+        pd.DataFrame(cascade_data).style.format({
             "Precio Activación": "${:,.2f}", 
             "Caída (%)": "{:.2%}", 
             "Inversión Extra ($)": "${:,.0f}", 
@@ -433,9 +418,9 @@ with tab_calc:
         use_container_width=True
     )
     
-    if not df_calc.empty:
+    if not pd.DataFrame(cascade_data).empty:
         st.divider()
-        last_row = df_calc.iloc[-1]
+        last_row = pd.DataFrame(cascade_data).iloc[-1]
         st.markdown(f"""
         ### 📝 Informe Ejecutivo
         **Configuración Inicial:** Capital: **\${c_capital:,.0f}** | Apalancamiento: **{c_leverage}x** | Precio Liq. Inicial: **\${c_liq_price:,.2f}**.
@@ -449,20 +434,20 @@ with tab_calc:
 with tab_backtest:
     st.markdown("### 📉 Validación Histórica")
     
-    col_bt1, col_bt2, col_bt3 = st.columns(3)
-    with col_bt1:
+    col1, col2, col3 = st.columns(3)
+    with col1:
         selected_asset_bt = st.selectbox("Seleccionar Activo Histórico", list(ASSET_MAP.keys()), key="sel_asset_bt")
         if ASSET_MAP[selected_asset_bt] == "MANUAL":
-            bt_ticker = st.text_input("Ticker Yahoo", value="DOT-USD")
+            bt_ticker = st.text_input("Ticker Yahoo", value="DOT-USD", key="bt_t")
         else:
             bt_ticker = ASSET_MAP[selected_asset_bt]
         bt_capital = st.number_input("Capital Inicial ($)", value=10000.0, key="bt_cap")
     
-    with col_bt2:
+    with col2:
         bt_start_date = st.date_input("Fecha Inicio", value=date.today() - timedelta(days=365*2))
         bt_leverage = st.slider("Apalancamiento Inicial", 1.1, 4.0, 2.0, 0.1, key="bt_lev")
     
-    with col_bt3:
+    with col3:
         bt_threshold = st.number_input("Umbral Defensa (%)", value=15.0, step=1.0, key="bt_th") / 100.0
         run_bt = st.button("🚀 Ejecutar Backtest", type="primary")
 
@@ -505,13 +490,14 @@ with tab_backtest:
                     action = "Hold"
                     
                     if low_val <= trigger_price and not is_liquidated:
-                        defense_price = min(open_val, trigger_price) 
+                        defense_price = min(float(row['Open']), trigger_price) 
                         
                         if defense_price <= liq_price:
                             is_liquidated = True
                             action = "LIQUIDATED ☠️"
                         else:
-                            target_liq_new = defense_price * target_ratio
+                            # Defensa
+                            target_liq_new = defense_price * (liq_price / start_price)
                             needed_collat_amt = debt_usd / (target_liq_new * ltv_liq)
                             add_collat_amt = needed_collat_amt - collateral_amt
                             
@@ -552,7 +538,7 @@ with tab_backtest:
                 fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Valor Estrategia"], name='Estrategia', fill='tozeroy', line=dict(color='green')))
                 fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Inversión Acumulada"], name='Inversión', line=dict(color='red', dash='dash')))
                 
-                events = df_res[df_res["Acción"].str.contains("DEFENSA")]
+                events = df_res[df_res["Acción"].str.contains("DEFENSA", na=False)]
                 if not events.empty:
                     fig.add_trace(go.Scatter(x=events.index, y=events["Valor Estrategia"], mode='markers', name='Defensa', marker=dict(color='orange', size=10, symbol='diamond')))
                 
@@ -566,10 +552,11 @@ with tab_backtest:
                 st.error(f"Error: {e}")
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 3: ESCÁNER REAL (MODO ROBUSTO + MEMORIA)
+#  PESTAÑA 3: ESCÁNER REAL (MODO SEGURO + MEMORIA)
 # ------------------------------------------------------------------------------
 with tab_onchain:
     st.markdown("### 📡 Escáner Aave V3 (Modo Seguro)")
+    st.caption("Conexión ligera verificada. Elige tu modo de análisis abajo.")
     
     col_net1, col_net2 = st.columns([1, 3])
     with col_net1:
@@ -639,10 +626,10 @@ with tab_onchain:
             if "Activo Único" in mode:
                 c_sel, c_par = st.columns(2)
                 with c_sel:
-                    sim_asset = st.selectbox("¿Cuál es tu colateral principal?", list(ASSET_MAP.keys()), key="oc_asset")
+                    sim_asset = st.selectbox("Activo Principal", list(ASSET_MAP.keys()), key="oc_a")
                     ticker = ASSET_MAP[sim_asset] if ASSET_MAP[sim_asset] != "MANUAL" else st.text_input("Ticker", "ETH-USD", key="oc_tick")
                 with c_par:
-                    def_th = st.number_input("Umbral Defensa (%)", 5.0, step=1.0, key="oc_th") / 100.0
+                    def_th = st.number_input("Umbral %", 5.0, key="oc_th") / 100.0
                     zones = st.slider("Zonas", 1, 10, 5, key="oc_z")
                     
                 try:
@@ -651,15 +638,15 @@ with tab_onchain:
                     
                     # Ingeniería inversa
                     implied_amt = d['col_usd'] / curr_p
-                    liq_price_real = d['debt_usd'] / (implied_amt * d['lt_avg'])
-                    cushion = (curr_p - liq_price_real) / curr_p
-                    st.metric("Precio Liquidación Actual", f"${liq_price_real:,.2f}", f"{cushion:.2%} Colchón")
+                    liq_real = d['debt_usd'] / (implied_amt * d['lt_avg'])
+                    cushion = (curr_p - liq_real) / curr_p
+                    st.metric("Precio Liquidación Actual", f"${liq_real:,.2f}", f"{cushion:.2%} Colchón")
                     
-                    ratio_target = liq_price_real / curr_p
+                    ratio_target = liq_real / curr_p
                     s_data = []
-                    s_curr_c, s_curr_l, s_cum = implied_amt, liq_price_real, 0.0
+                    s_curr_c, s_curr_l, s_cum = implied_amt, liq_real, 0.0
                     
-                    for i in range(1, zones+1):
+                    for i in range(1, zones + 1):
                         trig = s_curr_l * (1 + def_th)
                         targ = trig * ratio_target
                         
@@ -686,11 +673,13 @@ with tab_onchain:
                         })
                         s_curr_l = targ
                         
-                    st.dataframe(pd.DataFrame(s_data).style.format({
-                        "Precio Activación": "${:,.2f}", "Costo ($)": "${:,.0f}", 
-                        "Acumulado ($)": "${:,.0f}", "Nuevo Liq": "${:,.2f}", 
-                        "Nuevo HF": "{:.2f}", "Inyectar (Tokens)": "{:.4f}"
-                    }), use_container_width=True)
+                    st.dataframe(
+                        pd.DataFrame(s_data).style.format({
+                            "Precio Activación": "${:,.2f}", "Costo ($)": "${:,.0f}", 
+                            "Acumulado ($)": "${:,.0f}", "Nuevo Liq": "${:,.2f}", 
+                            "Nuevo HF": "{:.2f}", "Inyectar (Tokens)": "{:.4f}"
+                        }), use_container_width=True
+                    )
                     
                 except Exception as ex:
                     st.error(f"Error al obtener precio: {ex}")
@@ -729,7 +718,7 @@ with tab_onchain:
                         trigger_hf = current_hf - (hf_step * i)
                         if trigger_hf <= 1.001: trigger_hf = 1.001
                         
-                        # Caída necesaria para llegar ahí
+                        # Caída necesaria
                         drop_pct = 1 - (trigger_hf / current_hf)
                         
                         # Cálculos de restauración
