@@ -219,11 +219,11 @@ def connect_robust(network_name):
 #  3. INTERFAZ DE USUARIO
 # ==============================================================================
 
-tab_home, tab_calc, tab_backtest, tab_dynamic, tab_onchain = st.tabs([
+tab_home, tab_calc, tab_backtest, tab_dynamic_bt, tab_onchain = st.tabs([
     "🏠 Inicio", 
     "🧮 Calculadora", 
     "📉 Backtest (HODL)", 
-    "🔄 Backtest Dinámico", # <--- NUEVA
+    "🔄 Backtest Dinámico", 
     "📡 Escáner Real"
 ])
 
