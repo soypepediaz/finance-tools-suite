@@ -5,11 +5,10 @@ import yfinance as yf
 from datetime import date, timedelta
 from web3 import Web3
 import requests
-import json
-import os  # <--- NECESARIO PARA RAILWAY
+import os
 
 # ==============================================================================
-#  CONFIGURACIÓN DE LA PÁGINA Y ESTILOS
+#  CONFIGURACIÓN DE LA PÁGINA
 # ==============================================================================
 st.set_page_config(
     page_title="Looping Master - Final",
@@ -25,11 +24,11 @@ hide_st_style = """
             header {visibility: hidden;}
             .stDeployButton {display:none;}
             
-            /* Estilo para tarjetas */
-            div[data-testid="column"] {
-                background-color: #f9f9f9;
+            div[data-testid="stMetric"] {
+                background-color: #F0F2F6;
+                border: 1px solid #E0E0E0;
                 border-radius: 10px;
-                padding: 20px;
+                padding: 10px;
             }
             </style>
             """
@@ -38,33 +37,26 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 st.title("🛡️ Looping Master: Calculadora, Backtest & On-Chain")
 
 # ==============================================================================
-#  0. GESTIÓN DE SECRETOS (COMPATIBLE STREAMLIT CLOUD Y RAILWAY)
+#  0. GESTIÓN DE SECRETOS Y MARKETING
 # ==============================================================================
+
 def get_secret(key):
-    """Busca la clave primero en st.secrets (Local/Cloud) y luego en os.environ (Railway)"""
-    # 1. Intentar Streamlit Secrets
+    """Busca primero en Secrets (Local) y luego en Environment (Railway)"""
     if key in st.secrets:
         return st.secrets[key]
-    # 2. Intentar Variables de Entorno (Railway)
     if key in os.environ:
         return os.environ[key]
     return None
 
-# ==============================================================================
-#  1. CONFIGURACIÓN MARKETING (MOOSEND)
-# ==============================================================================
 MOOSEND_LIST_ID = "75c61863-63dc-4fd3-9ed8-856aee90d04a"
 
 def add_subscriber_moosend(name, email):
     """Envía el suscriptor a la lista de Moosend vía API"""
     try:
-        # Usamos la nueva función get_secret
         api_key = get_secret("MOOSEND_API_KEY")
-        
         if not api_key:
-            return False, "Falta configuración de API Key (Secrets/Env)."
+            return False, "Falta configuración de API Key."
             
-        # Endpoint de suscripción de Moosend
         url = f"https://api.moosend.com/v3/subscribers/{MOOSEND_LIST_ID}/subscribe.json?apikey={api_key}"
         
         headers = {
@@ -89,15 +81,13 @@ def add_subscriber_moosend(name, email):
             except:
                 error_msg = str(response.status_code)
             return False, error_msg
-            
     except Exception as e:
         return False, str(e)
 
 # ==============================================================================
-#  2. CONFIGURACIÓN DE REDES Y CONTRATOS
+#  1. CONFIGURACIÓN DE REDES
 # ==============================================================================
 
-# Usamos el 'pool_provider' (AddressProvider) para encontrar siempre la dirección correcta del Pool
 NETWORKS = {
     "Base": {
         "chain_id": 8453,
@@ -131,9 +121,8 @@ NETWORKS = {
     }
 }
 
-# ABI LIGERO (Solo lo necesario para conectar y leer totales)
+# ABI LIGERO (AddressProvider + UserData)
 AAVE_ABI = [
-    # Función para preguntar al Provider dónde está el Pool
     {
         "inputs": [],
         "name": "getPool",
@@ -141,7 +130,6 @@ AAVE_ABI = [
         "stateMutability": "view",
         "type": "function"
     },
-    # Función ligera getUserAccountData (Devuelve totales en USD base)
     {
         "inputs": [{"internalType": "address", "name": "user", "type": "address"}],
         "name": "getUserAccountData",
@@ -158,7 +146,6 @@ AAVE_ABI = [
     }
 ]
 
-# Mapeo de activos para los selectores
 ASSET_MAP = {
     "Bitcoin (WBTC/BTC)": "BTC-USD", 
     "Ethereum (WETH/ETH)": "ETH-USD", 
@@ -170,31 +157,23 @@ ASSET_MAP = {
 }
 
 # ==============================================================================
-#  3. FUNCIONES AUXILIARES (CONEXIÓN ROBUSTA)
+#  2. FUNCIONES AUXILIARES
 # ==============================================================================
 
 def get_web3_session(rpc_url):
-    """Crea una sesión Web3 disfrazada de navegador Chrome"""
     s = requests.Session()
-    s.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    # Timeout extendido
-    return Web3(Web3.HTTPProvider(rpc_url, session=s, request_kwargs={'timeout': 60}))
+    s.headers.update({'User-Agent': 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36'})
+    return Web3(Web3.HTTPProvider(rpc_url, session=s, request_kwargs={'timeout': 30}))
 
 def connect_robust(network_name):
-    """Intenta conectar rotando RPCs y priorizando Variables de Entorno (Railway)"""
     config = NETWORKS[network_name]
-    rpcs = config["rpcs"][:] # Copia de la lista para no modificar la global
+    rpcs = config["rpcs"][:]
     
     secret_key = f"{network_name.upper()}_RPC_URL"
+    private_rpc = get_secret(secret_key)
     used_private = False
     
-    # Inyectar secreto (Alchemy/Infura) usando la función compatible
-    private_rpc = get_secret(secret_key)
-    
     if private_rpc:
-        # Limpieza agresiva de comillas o espacios que suelen colarse al copiar
         clean_rpc = private_rpc.strip().replace('"', '').replace("'", "")
         rpcs.insert(0, clean_rpc)
         used_private = True
@@ -203,16 +182,14 @@ def connect_robust(network_name):
         try:
             w3 = get_web3_session(rpc)
             if w3.is_connected():
-                # Verificación extra de Chain ID para asegurar que el nodo no miente
                 if w3.eth.chain_id == config["chain_id"]:
                     return w3, rpc, used_private
         except: 
             continue
-            
     return None, None, False
 
 # ==============================================================================
-#  4. INTERFAZ DE USUARIO (PESTAÑAS)
+#  3. INTERFAZ DE USUARIO (PESTAÑAS)
 # ==============================================================================
 
 tab_home, tab_calc, tab_backtest, tab_onchain = st.tabs([
@@ -222,113 +199,83 @@ tab_home, tab_calc, tab_backtest, tab_onchain = st.tabs([
     "📡 Escáner Real"
 ])
 
-# ------------------------------------------------------------------------------
-#  PESTAÑA 0: PORTADA & MARKETING
-# ------------------------------------------------------------------------------
+# --- PESTAÑA 0: PORTADA ---
 with tab_home:
-    # --- HERO SECTION ---
-    col_hero_L, col_hero_R = st.columns([2, 1], gap="large")
+    col_hero_L, col_hero_R = st.columns([2, 1])
     
     with col_hero_L:
         st.markdown("# 🛡️ Domina el Looping en DeFi")
         st.markdown("#### Maximiza tus rendimientos sin morir en el intento.")
-        
-        st.markdown("""
-        Bienvenido a **Looping Master**, la herramienta definitiva para analizar, proyectar y 
-        defender tus posiciones apalancadas en Aave y otros protocolos.
-        """)
-        
-        st.markdown("""
-        * 🧮 **Calculadora:** Proyecta rentabilidades y puntos de liquidación.
-        * 📉 **Backtest:** Valida tu estrategia con datos históricos reales.
-        * 📡 **Escáner:** Audita tu cartera real en Blockchain y simula "Crash Tests".
-        """)
-        
-        st.info("👆 **Empieza ahora:** Navega por las pestañas superiores para usar las herramientas.")
+        st.markdown("Bienvenido a **Looping Master**, la herramienta definitiva para analizar, proyectar y defender tus posiciones.")
+        st.info("💡 **Tip:** Navega por las pestañas superiores para usar las herramientas.")
 
     with col_hero_R:
-        with st.container(border=True):
-            st.markdown("### ⛺ Campamento DeFi")
-            st.caption("Tu comunidad de Estrategias On-Chain.")
-            st.metric("Nivel de Riesgo", "Gestionado", delta="Alto Rendimiento")
-            st.markdown("*Aprende a rentabilizar tus activos de forma segura.*")
+        st.markdown("### ⛺ Campamento DeFi")
+        st.metric("Riesgo", "Gestionado", delta="Alto Rendimiento")
 
     st.divider()
-
-    # --- LEAD MAGNET ---
-    st.markdown("### 🎓 Aprende a dominar estas estrategias")
+    st.markdown("### 🚀 ¿Quieres recibir más estrategias como esta?")
     
-    col_lead_L, col_lead_R = st.columns([1.5, 1], gap="large")
+    c_form_1, c_form_2 = st.columns([3, 2])
     
-    with col_lead_L:
+    with c_form_1:
         st.markdown("""
-        Esta herramienta ha sido desarrollada por el equipo de **Campamento DeFi**.
+        Esta herramienta es solo la punta del iceberg. En el **Campamento DeFi** compartimos:
+        - Estrategias de Yield Farming avanzadas.
+        - Alertas de seguridad y gestión de riesgo.
         
-        El *Looping Avanzado* es solo una de las múltiples estrategias que enseñamos para rentabilizar tus activos onchain de forma segura.
-        
-        **¿Quieres conocer más en detalle otras estrategias como esta? Pues es muy fácil (3 pasos):**
-        
-        **Paso 1.** 📘 Rellenas el formulario con tus datos.
-        
-        **Paso 2.** 🚨 Revisa tu bandeja de entrada. Algunos gestores de correo se equivocan y nos meten en la carpeta de spam.
-        
-        **Paso 3.** 🛠️ Te iremos informando de nuevas herramientas que vayamos desarrollando y cómo puedes sacarle el máximo partido entrando a la Membresía del Campamento.
+        **Únete gratis a nuestra Newsletter y recibe el 'Manual de Supervivencia DeFi'.**
         """)
-    
-    with col_lead_R:
-        with st.container(border=True):
-            st.markdown("#### 📩 Recibir Guía Gratuita")
-            with st.form("lead_magnet_form_home"):
-                name_input = st.text_input("Nombre", placeholder="Tu nombre")
-                email_input = st.text_input("Email", placeholder="tu@email.com")
-                
-                # Botón de acción principal
-                submitted = st.form_submit_button("¡Quiero aprender!", type="primary", use_container_width=True)
-                
-                if submitted:
-                    if email_input and "@" in email_input:
-                        with st.spinner("Enviando solicitud..."):
-                            ok, msg = add_subscriber_moosend(name_input, email_input)
-                            
-                        if ok:
-                            st.success(f"¡Genial, {name_input}! Revisa tu correo ahora.")
-                            st.balloons()
-                        else:
-                            st.error(f"Hubo un error técnico al suscribirte: {msg}")
+        
+    with c_form_2:
+        with st.form("lead_magnet_form"):
+            name_input = st.text_input("Nombre", placeholder="Tu nombre")
+            email_input = st.text_input("Email", placeholder="tu@email.com")
+            
+            submitted = st.form_submit_button("📩 Unirme y Recibir Manual", type="primary")
+            
+            if submitted:
+                if email_input and "@" in email_input:
+                    with st.spinner("Enviando..."):
+                        ok, msg = add_subscriber_moosend(name_input, email_input)
+                        
+                    if ok:
+                        st.success("¡Bienvenido! Revisa tu correo.")
+                        st.balloons()
                     else:
-                        st.warning("Por favor, introduce un email válido.")
-
+                        st.error(f"Error: {msg}")
+                else:
+                    st.error("Email inválido.")
+    
     st.divider()
-    st.caption("Desarrollado con ❤️ por el equipo de Campamento DeFi. DYOR.")
+    st.caption("Desarrollado con ❤️ por Campamento DeFi.")
 
-# ------------------------------------------------------------------------------
-#  PESTAÑA 1: CALCULADORA ESTÁTICA
-# ------------------------------------------------------------------------------
+# --- PESTAÑA 1: CALCULADORA ---
 with tab_calc:
-    st.markdown("### 🧮 Simulador Estático de Defensa")
+    st.markdown("### 🧮 Simulador Estático")
     
-    col_input1, col_input2, col_input3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
     
-    with col_input1:
-        selected_asset_calc = st.selectbox("Seleccionar Activo", list(ASSET_MAP.keys()), key="sel_asset_c")
+    with col1:
+        selected_asset_calc = st.selectbox("Activo", list(ASSET_MAP.keys()), key="c_s")
         if ASSET_MAP[selected_asset_calc] == "MANUAL":
-            c_asset_name = st.text_input("Ticker", value="PEPE", key="c_asset_man")
+            c_asset_name = st.text_input("Ticker", value="PEPE", key="c_t")
         else:
             c_asset_name = selected_asset_calc.split("(")[1].replace(")", "")
             
-        c_price = st.number_input(f"Precio Actual {c_asset_name} ($)", value=100000.0, step=100.0, key="c_price")
-        c_target = st.number_input(f"Precio Objetivo ($)", value=130000.0, step=100.0, key="c_target")
+        c_price = st.number_input(f"Precio {c_asset_name}", 100000.0, step=100.0, key="c_p")
+        c_target = st.number_input("Objetivo", 130000.0, step=100.0, key="c_target")
         
-    with col_input2:
-        c_capital = st.number_input("Capital Inicial ($)", value=10000.0, step=1000.0, key="c_capital")
-        c_leverage = st.slider("Apalancamiento (x)", 1.1, 5.0, 2.0, 0.1, key="c_lev")
+    with col2:
+        c_capital = st.number_input("Capital", 10000.0, step=1000.0, key="c_cap")
+        c_leverage = st.slider("Leverage", 1.1, 5.0, 2.0, key="c_lev")
         
-    with col_input3:
-        c_ltv = st.slider("LTV Liquidación (%)", 50, 95, 78, 1, key="c_ltv") / 100.0
-        c_threshold = st.number_input("Umbral Defensa (%)", value=15.0, step=1.0, key="c_th") / 100.0
-        c_zones = st.slider("Zonas de Defensa", 1, 10, 5, key="c_zones")
+    with col3:
+        c_ltv = st.slider("LTV Liq %", 50, 95, 78, key="c_ltv") / 100.0
+        c_threshold = st.number_input("Umbral %", 15.0, key="c_th") / 100.0
+        c_zones = st.slider("Zonas", 1, 10, 5, key="c_z")
 
-    # Cálculos base
+    # Cálculos Expandidos
     c_collat_usd = c_capital * c_leverage
     c_debt_usd = c_collat_usd - c_capital
     c_collat_amt = c_collat_usd / c_price
@@ -342,57 +289,40 @@ with tab_calc:
         c_target_ratio = 0
         c_cushion_pct = 0
     
-    # Generación de tabla en cascada
+    # Tabla Cascada Expandida
     cascade_data = []
     curr_collat = c_collat_amt
     curr_liq = c_liq_price
     cum_cost = 0.0
     
     for i in range(1, c_zones + 1):
-        # Precio al que salta la alarma
         trig_p = curr_liq * (1 + c_threshold)
-        
-        # Caída porcentual desde el precio actual
         drop_pct = (c_price - trig_p) / c_price
-        
-        # Nuevo precio objetivo de liquidación
         targ_liq = trig_p * c_target_ratio
         
         if targ_liq > 0:
-            # Cálculo de colateral necesario
             need_col = c_debt_usd / (targ_liq * c_ltv)
             add_col = need_col - curr_collat
         else:
             add_col = 0
             
-        if add_col < 0:
-            add_col = 0
-            
-        # Costo de la inyección
+        add_col = max(0, add_col)
         cost = add_col * trig_p
         cum_cost += cost
         curr_collat += add_col
-        
-        # Métricas financieras
-        total_inv = c_capital + cum_cost
-        final_val = curr_collat * c_target
-        net_prof = (final_val - c_debt_usd) - total_inv
-        
-        if total_inv > 0:
-            roi = (net_prof / total_inv) * 100
-        else:
-            roi = 0
-            
-        if drop_pct > 0:
-            ratio = roi / (drop_pct * 100)
-        else:
-            ratio = 0
         
         # Nuevo HF
         if c_debt_usd > 0:
             new_hf = ((curr_collat * trig_p) * c_ltv) / c_debt_usd
         else:
             new_hf = 999
+            
+        # ROI
+        total_inv = c_capital + cum_cost
+        final_val = curr_collat * c_target
+        net_prof = (final_val - c_debt_usd) - total_inv
+        roi = (net_prof / total_inv) * 100 if total_inv > 0 else 0
+        ratio = roi / (drop_pct * 100) if drop_pct > 0 else 0
         
         cascade_data.append({
             "Zona": f"#{i}", 
@@ -408,11 +338,9 @@ with tab_calc:
         })
         curr_liq = targ_liq
 
-    df_calc = pd.DataFrame(cascade_data)
-    
     st.divider()
     st.dataframe(
-        df_calc.style.format({
+        pd.DataFrame(cascade_data).style.format({
             "Precio Activación": "${:,.2f}", 
             "Caída (%)": "{:.2%}", 
             "Inversión Extra ($)": "${:,.0f}", 
@@ -425,151 +353,114 @@ with tab_calc:
         }), 
         use_container_width=True
     )
-    
-    if not df_calc.empty:
-        st.divider()
-        last_row = df_calc.iloc[-1]
-        st.markdown(f"""
-        ### 📝 Informe Ejecutivo
-        **Configuración Inicial:** Capital: **\${c_capital:,.0f}** | Apalancamiento: **{c_leverage}x** | Precio Liq. Inicial: **\${c_liq_price:,.2f}**.
-        
-        **Escenario Extremo:** Si el mercado cae un **{last_row['Caída (%)']:.1%}**, necesitarás haber inyectado un total de **\${last_row['Total Invertido ($)']-c_capital:,.0f}** para sobrevivir. Si tras eso el precio recupera al objetivo, tu ROI sería del **{last_row['ROI (%)']:.2f}%**.
-        """)
 
-# ------------------------------------------------------------------------------
-#  PESTAÑA 2: MOTOR DE BACKTESTING
-# ------------------------------------------------------------------------------
+# --- PESTAÑA 2: BACKTEST ---
 with tab_backtest:
     st.markdown("### 📉 Validación Histórica")
     
-    col_bt1, col_bt2, col_bt3 = st.columns(3)
-    with col_bt1:
-        selected_asset_bt = st.selectbox("Seleccionar Activo Histórico", list(ASSET_MAP.keys()), key="sel_asset_bt")
-        if ASSET_MAP[selected_asset_bt] == "MANUAL":
-            bt_ticker = st.text_input("Ticker Yahoo", value="DOT-USD")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        sel_bt = st.selectbox("Activo", list(ASSET_MAP.keys()), key="bt_s")
+        if ASSET_MAP[sel_bt] == "MANUAL":
+            bt_ticker = st.text_input("Ticker Yahoo", value="DOT-USD", key="bt_t")
         else:
-            bt_ticker = ASSET_MAP[selected_asset_bt]
-        bt_capital = st.number_input("Capital Inicial ($)", value=10000.0, key="bt_cap")
-    
-    with col_bt2:
-        bt_start_date = st.date_input("Fecha Inicio", value=date.today() - timedelta(days=365*2))
-        bt_leverage = st.slider("Apalancamiento Inicial", 1.1, 4.0, 2.0, 0.1, key="bt_lev")
-    
-    with col_bt3:
-        bt_threshold = st.number_input("Umbral Defensa (%)", value=15.0, step=1.0, key="bt_th") / 100.0
-        run_bt = st.button("🚀 Ejecutar Backtest", type="primary")
+            bt_ticker = ASSET_MAP[sel_bt]
+        bt_capital = st.number_input("Capital", 10000.0, key="bt_c")
+        
+    with col2:
+        bt_start = st.date_input("Inicio", date.today() - timedelta(days=365*2))
+        bt_lev = st.slider("Lev Inicial", 1.1, 4.0, 2.0, key="bt_l")
+        
+    with col3:
+        bt_th = st.number_input("Umbral %", 15.0, key="bt_th") / 100.0
+        run_bt = st.button("🚀 Backtest")
 
     if run_bt:
         with st.spinner(f"Simulando {bt_ticker}..."):
             try:
-                df_hist = yf.download(bt_ticker, start=bt_start_date, end=date.today(), progress=False)
+                df = yf.download(bt_ticker, start=bt_start, progress=False)
                 
-                if df_hist.empty:
+                if df.empty:
                     st.error("Sin datos.")
                     st.stop()
                 
-                if isinstance(df_hist.columns, pd.MultiIndex):
-                    df_hist.columns = df_hist.columns.get_level_values(0)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
 
-                start_date_actual = df_hist.index[0].date()
-                start_price = float(df_hist.iloc[0]['Close']) 
+                p0 = float(df.iloc[0]['Close'])
+                col_usd = bt_capital * bt_lev
+                debt_usd = col_usd - bt_capital
+                amt = col_usd / p0
+                liq = debt_usd / (amt * c_ltv) # Usa LTV de la Pestaña 1
                 
-                collateral_usd = bt_capital * bt_leverage
-                debt_usd = collateral_usd - bt_capital 
-                collateral_amt = collateral_usd / start_price 
+                hist = []
+                inj = 0.0
+                dead = False
                 
-                ltv_liq = c_ltv # Usamos el LTV de la pestaña 1
-                liq_price = debt_usd / (collateral_amt * ltv_liq)
-                target_ratio = liq_price / start_price 
-                
-                history = []
-                total_injected = 0.0
-                is_liquidated = False
-                
-                for date_idx, row in df_hist.iterrows():
-                    if pd.isna(row['Close']): continue
-                    low_val = float(row['Low'])
-                    close_val = float(row['Close'])
-                    open_val = float(row['Open'])
+                for d, r in df.iterrows():
+                    if pd.isna(r['Close']): continue
                     
-                    trigger_price = liq_price * (1 + bt_threshold)
+                    trig = liq * (1 + bt_th)
                     action = "Hold"
                     
-                    if low_val <= trigger_price and not is_liquidated:
-                        defense_price = min(open_val, trigger_price) 
+                    if r['Low'] <= trig and not dead:
+                        def_p = min(float(r['Open']), trig)
                         
-                        if defense_price <= liq_price:
-                            is_liquidated = True
-                            action = "LIQUIDATED ☠️"
+                        if def_p <= liq:
+                            dead = True
+                            action = "LIQUIDADO"
                         else:
-                            target_liq_new = defense_price * target_ratio
-                            needed_collat_amt = debt_usd / (target_liq_new * ltv_liq)
-                            add_collat_amt = needed_collat_amt - collateral_amt
+                            # Defensa
+                            new_targ = def_p * (liq/p0)
+                            need_amt = debt_usd / (new_targ * c_ltv)
+                            add = need_amt - amt
                             
-                            if add_collat_amt > 0:
-                                total_injected += add_collat_amt * defense_price
-                                collateral_amt += add_collat_amt
-                                liq_price = target_liq_new 
-                                action = "DEFENSA 🛡️"
+                            if add > 0:
+                                inj += add * def_p
+                                amt += add
+                                liq = new_targ
+                                action = "DEFENSA"
                     
-                    if low_val <= liq_price and not is_liquidated:
-                        is_liquidated = True
+                    if r['Low'] <= liq:
+                        dead = True
                         
-                    if not is_liquidated:
-                        pos_value = (collateral_amt * close_val) - debt_usd
-                    else:
-                        pos_value = 0
-                        
-                    history.append({
-                        "Fecha": date_idx, 
-                        "Acción": action, 
-                        "Liq Price": liq_price if not is_liquidated else 0,
-                        "Inversión Acumulada": bt_capital + total_injected, 
-                        "Valor Estrategia": pos_value if not is_liquidated else 0, 
-                        "Valor HODL": (bt_capital / start_price) * close_val 
+                    val = (amt * r['Close']) - debt_usd if not dead else 0
+                    
+                    hist.append({
+                        "Fecha": d, 
+                        "Valor": val, 
+                        "Inversión": bt_capital + inj,
+                        "Acción": action
                     })
                     
-                    if is_liquidated: break
+                    if dead: break
                 
-                df_res = pd.DataFrame(history).set_index("Fecha")
+                res_df = pd.DataFrame(hist).set_index("Fecha")
                 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Resultado", "LIQUIDADO" if is_liquidated else "VIVO")
-                c2.metric("Inyectado Total", f"${total_injected:,.0f}")
-                if not df_res.empty:
-                    c3.metric("Valor Final", f"${df_res.iloc[-1]['Valor Estrategia']:,.0f}")
+                st.metric("Resultado", "LIQUIDADO" if dead else "VIVO", f"Inyectado: ${inj:,.0f}")
                 
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Valor Estrategia"], name='Estrategia', fill='tozeroy', line=dict(color='green')))
-                fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Inversión Acumulada"], name='Inversión', line=dict(color='red', dash='dash')))
-                
-                events = df_res[df_res["Acción"].str.contains("DEFENSA")]
-                if not events.empty:
-                    fig.add_trace(go.Scatter(x=events.index, y=events["Valor Estrategia"], mode='markers', name='Defensa', marker=dict(color='orange', size=10, symbol='diamond')))
-                
+                fig.add_trace(go.Scatter(x=res_df.index, y=res_df["Valor"], name='Valor Estrategia', line=dict(color='green')))
+                fig.add_trace(go.Scatter(x=res_df.index, y=res_df["Inversión"], name='Inversión Total', line=dict(color='red', dash='dash')))
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.divider()
-                st.subheader("🏁 Datos de Entrada")
-                st.write(f"Inicio: {start_date_actual} | Precio Entrada: ${start_price:,.2f} | Deuda Inicial: ${debt_usd:,.0f}")
-
             except Exception as e:
                 st.error(f"Error: {e}")
-
-# ------------------------------------------------------------------------------
-#  PESTAÑA 3: ESCÁNER REAL (MODO ROBUSTO + DUAL + MEMORIA)
+                # ------------------------------------------------------------------------------
+#  PESTAÑA 3: ESCÁNER REAL (MODO BLINDADO + MEMORIA)
 # ------------------------------------------------------------------------------
 with tab_onchain:
     st.markdown("### 📡 Escáner Aave V3 (Modo Seguro)")
-    st.caption("Conexión ligera verificada. Elige tu modo de análisis abajo.")
     
-    col_net1, col_net2 = st.columns([1, 3])
-    with col_net1:
+    col_net, col_addr = st.columns([1, 3])
+    
+    with col_net:
         net = st.selectbox("Red", list(NETWORKS.keys()))
-    with col_net2:
+        
+    with col_addr:
         addr = st.text_input("Wallet Address (0x...)", placeholder="0x...")
     
-    # --- GESTIÓN DE ESTADO (MEMORIA DE SESIÓN) ---
+    # Inicializar Memoria
     if 'portfolio_data' not in st.session_state:
         st.session_state.portfolio_data = None
 
@@ -578,9 +469,11 @@ with tab_onchain:
             st.warning("Falta dirección")
         else:
             with st.spinner(f"Conectando a {net}..."):
-                w3, rpc_used, is_private = connect_robust(net)
+                w3, rpc, priv = connect_robust(net)
+                
                 if not w3:
-                    st.error("Error conexión RPC. Revisa tus Secrets."); st.stop()
+                    st.error("Error de conexión RPC. Revisa tus Secrets.")
+                    st.stop()
                 
                 try:
                     # 1. Obtener Pool Real
@@ -588,172 +481,165 @@ with tab_onchain:
                     prov_contract = w3.eth.contract(address=prov_addr, abi=AAVE_ABI)
                     pool_addr = prov_contract.functions.getPool().call()
                     
-                    # 2. Llamada Ligera (getUserAccountData)
+                    # 2. Llamada Ligera
                     pool = w3.eth.contract(address=pool_addr, abi=AAVE_ABI)
                     data = pool.functions.getUserAccountData(w3.to_checksum_address(addr)).call()
                     
-                    # 3. Guardar en Memoria Session State
+                    # 3. Guardar
                     st.session_state.portfolio_data = {
                         "col_usd": data[0] / 10**8,
                         "debt_usd": data[1] / 10**8,
                         "lt_avg": data[3] / 10000,
                         "hf": data[5] / 10**18,
-                        "status_msg": f"🔒 Privado" if is_private else f"🌍 Público ({rpc_used[:20]}...)"
+                        "status_msg": f"🔒 Privado" if priv else f"🌍 Público"
                     }
+                    
                 except Exception as e:
-                    st.error(f"Error de lectura: {e}")
+                    st.error(f"Error: {e}")
 
-    # --- MOSTRAR DATOS DESDE MEMORIA ---
+    # Mostrar Resultados
     if st.session_state.portfolio_data:
         d = st.session_state.portfolio_data
         
-        st.success(f"✅ Datos recibidos. Conexión: {d['status_msg']}")
+        st.success(f"✅ Conectado: {d['status_msg']}")
         
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Salud (HF)", f"{d['hf']:.2f}", delta_color="normal" if d['hf']>1.1 else "inverse")
-        m2.metric("Colateral Total", f"${d['col_usd']:,.2f}")
-        m3.metric("Deuda Total", f"${d['debt_usd']:,.2f}")
-        m4.metric("Liq. Threshold (Avg)", f"{d['lt_avg']:.2%}")
+        m1.metric("HF", f"{d['hf']:.2f}", delta_color="normal" if d['hf']>1.1 else "inverse")
+        m2.metric("Colateral", f"${d['col_usd']:,.2f}")
+        m3.metric("Deuda", f"${d['debt_usd']:,.2f}")
+        m4.metric("LT Avg", f"{d['lt_avg']:.2%}")
         
         if d['debt_usd'] > 0:
             st.divider()
-            st.subheader("🛠️ Estrategia de Defensa")
+            st.subheader("🛠️ Estrategia")
             
-            # SELECTOR DE MODO
-            mode = st.radio("Tipo de Posición:", 
-                            ["🛡️ Activo Único (Detallado con Precios)", 
-                             "💼 Multi-Colateral (Plan Preventivo por Salud)"], 
-                            horizontal=True)
+            mode = st.radio("Modo:", ["🛡️ Activo Único", "💼 Multi-Colateral"], horizontal=True)
             
-            # ==================================================================
             # MODO A: ACTIVO ÚNICO
-            # ==================================================================
             if "Activo Único" in mode:
                 c_sel, c_par = st.columns(2)
                 with c_sel:
-                    sim_asset = st.selectbox("¿Cuál es tu colateral principal?", list(ASSET_MAP.keys()), key="oc_asset")
-                    ticker = ASSET_MAP[sim_asset] if ASSET_MAP[sim_asset] != "MANUAL" else st.text_input("Ticker", "ETH-USD", key="oc_tick")
+                    sim_asset = st.selectbox("Activo Principal", list(ASSET_MAP.keys()), key="oc_a")
+                    if ASSET_MAP[sim_asset] == "MANUAL":
+                        ticker = st.text_input("Ticker", "ETH-USD", key="oc_t")
+                    else:
+                        ticker = ASSET_MAP[sim_asset]
                 with c_par:
-                    # Umbral mínimo bajado al 5%
-                    def_th = st.number_input("Umbral Defensa (%)", 5.0, step=1.0, key="oc_th") / 100.0
+                    def_th = st.number_input("Umbral %", 5.0, key="oc_th") / 100.0
                     zones = st.slider("Zonas", 1, 10, 5, key="oc_z")
-                    
+                
                 try:
                     curr_p = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
-                    st.metric(f"Precio Mercado ({ticker})", f"${curr_p:,.2f}")
+                    st.metric(f"Precio {ticker}", f"${curr_p:,.2f}")
                     
-                    # Ingeniería inversa
                     implied_amt = d['col_usd'] / curr_p
-                    liq_price_real = d['debt_usd'] / (implied_amt * d['lt_avg'])
-                    cushion = (curr_p - liq_price_real) / curr_p
-                    st.metric("Precio Liquidación Actual", f"${liq_price_real:,.2f}", f"{cushion:.2%} Colchón")
+                    liq_real = d['debt_usd'] / (implied_amt * d['lt_avg'])
+                    st.metric("Liq Actual", f"${liq_real:,.2f}")
                     
-                    ratio_target = liq_price_real / curr_p
+                    ratio_t = liq_real / curr_p
+                    s_curr_c = implied_amt
+                    s_cum = 0.0
                     s_data = []
-                    s_curr_c, s_curr_l, s_cum = implied_amt, liq_price_real, 0.0
                     
-                    for i in range(1, zones+1):
-                        trig = s_curr_l * (1 + def_th)
-                        targ = trig * ratio_target
+                    for i in range(1, zones + 1):
+                        if i == 1:
+                            trig = liq_real * (1 + def_th)
+                        else:
+                            trig = s_data[-1]["Activación"] * (1 + def_th)
+                            
+                        targ = trig * ratio_t
+                        need = d['debt_usd'] / (targ * d['lt_avg'])
+                        add = max(0, need - s_curr_c)
                         
-                        # Cantidad necesaria
-                        needed_amt = d['debt_usd'] / (targ * d['lt_avg'])
-                        add_amt = max(0, needed_amt - s_curr_c)
+                        cost = add * trig
+                        s_cum += cost
+                        s_curr_c += add
                         
-                        cost_usd = add_amt * trig
-                        s_cum += cost_usd
-                        s_curr_c += add_amt
-                        
-                        # Nuevo HF al inyectar
-                        new_col_usd = s_curr_c * trig
-                        new_hf = (new_col_usd * d['lt_avg']) / d['debt_usd']
+                        new_hf = (s_curr_c * trig * d['lt_avg']) / d['debt_usd']
                         
                         s_data.append({
-                            "Zona": f"#{i}", 
-                            "Precio Activación": trig, 
-                            "Inyectar (Tokens)": add_amt, 
-                            "Costo ($)": cost_usd, 
-                            "Acumulado ($)": s_cum, 
+                            "Zona": i, 
+                            "Activación": trig, 
+                            "Inyectar": add, 
+                            "Costo": cost, 
                             "Nuevo Liq": targ, 
                             "Nuevo HF": new_hf
                         })
-                        s_curr_l = targ
-                        
+                    
                     st.dataframe(pd.DataFrame(s_data).style.format({
-                        "Precio Activación": "${:,.2f}", "Costo ($)": "${:,.0f}", 
-                        "Acumulado ($)": "${:,.0f}", "Nuevo Liq": "${:,.2f}", 
-                        "Nuevo HF": "{:.2f}", "Inyectar (Tokens)": "{:.4f}"
+                        "Activación": "${:,.2f}", "Costo": "${:,.0f}", 
+                        "Nuevo Liq": "${:,.2f}", "Nuevo HF": "{:.2f}", "Inyectar": "{:.4f}"
                     }), use_container_width=True)
                     
-                except Exception as ex:
-                    st.error(f"Error precio: {ex}")
+                except:
+                    st.error("Error obteniendo precio.")
 
-            # ==================================================================
-            # MODO B: MULTI-COLATERAL (LÓGICA PREVENTIVA DE SALUD)
-            # ==================================================================
+            # MODO B: MULTI-COLATERAL
             else:
-                st.info("Planificación preventiva basada en caída de Salud (Health Factor).")
+                if (d['col_usd'] * d['lt_avg']) > 0:
+                    max_drop = 1 - (d['debt_usd'] / (d['col_usd'] * d['lt_avg']))
+                else:
+                    max_drop = 0
+                    
+                st.metric("Margen Caída", f"{max_drop:.2%}")
                 
-                col_opts, col_ref = st.columns(2)
-                with col_opts:
-                    num_defenses = st.slider("Número de Defensas", 1, 10, 5, key="mc_zones")
-                with col_ref:
-                    witness_asset = st.selectbox("Activo Testigo (Referencia Visual)", list(ASSET_MAP.keys()), key="mc_witness")
-                    w_ticker = ASSET_MAP[witness_asset] if ASSET_MAP[witness_asset] != "MANUAL" else "ETH-USD"
+                thf = st.number_input("HF Objetivo", 1.05, key="oc_hf")
+                
+                c_w, _ = st.columns(2)
+                with c_w:
+                    wa = st.selectbox("Testigo", list(ASSET_MAP.keys()), key="wa")
+                    wt = ASSET_MAP[wa] if ASSET_MAP[wa] != "MANUAL" else "ETH-USD"
                 
                 try:
-                    w_price = yf.Ticker(w_ticker).history(period="1d")['Close'].iloc[-1]
-                except: w_price = 0
+                    wp = yf.Ticker(wt).history(period="1d")['Close'].iloc[-1]
+                except:
+                    wp = 0
 
-                current_hf = d['hf']
+                sim = []
                 
-                if current_hf <= 1.0:
-                    st.error("La posición ya está en rango de liquidación (HF < 1.0)")
-                else:
-                    # Lógica de saltos de HF
-                    hf_gap = current_hf - 1.0
-                    hf_step = hf_gap / num_defenses
+                if d['hf'] > 1.0:
+                    gap = d['hf'] - 1.0
+                    step = gap / 5
                     
-                    mc_data = []
-                    
-                    for i in range(1, num_defenses + 1):
-                        # Trigger HF
-                        trigger_hf = current_hf - (hf_step * i)
-                        if trigger_hf <= 1.001: trigger_hf = 1.001
+                    for i in range(1, 6):
+                        trig_hf = d['hf'] - (step * i)
+                        if trig_hf <= 1.001: trig_hf = 1.001
                         
-                        # Caída necesaria
-                        drop_pct = 1 - (trigger_hf / current_hf)
+                        drop = 1 - (trig_hf / d['hf'])
                         
-                        # Cálculos de restauración
-                        shocked_col = d['col_usd'] * (1 - drop_pct)
-                        shocked_lt_val = (d['col_usd'] * d['lt_avg']) * (1 - drop_pct)
+                        # Colateral tras caída
+                        s_col = d['col_usd'] * (1 - drop)
                         
-                        # Capital para volver al HF Original
-                        needed_capital = d['debt_usd'] - (shocked_lt_val / current_hf)
-                        if needed_capital < 0: needed_capital = 0
+                        # LT valor tras caída
+                        s_lt = (d['col_usd'] * d['lt_avg']) * (1 - drop)
                         
-                        w_price_shock = w_price * (1 - drop_pct)
+                        # Necesidad para restaurar HF
+                        need = d['debt_usd'] - (s_lt / d['hf'])
+                        if need < 0: need = 0
                         
-                        final_debt = d['debt_usd'] - needed_capital
-                        if final_debt > 0:
-                            final_hf = (shocked_col * d['lt_avg']) / final_debt
+                        nd = d['debt_usd'] - need
+                        
+                        if nd > 0:
+                            fhf = (s_col * d['lt_avg']) / nd
                         else:
-                            final_hf = 999.0
+                            fhf = 999.0
                         
-                        mc_data.append({
-                            "Trigger HF": f"{trigger_hf:.2f}",
-                            "Caída Mercado": f"-{drop_pct:.2%}",
-                            f"Precio {w_ticker}": w_price_shock,
-                            "Capital a Restaurar ($)": needed_capital,
-                            "Nuevo HF": f"{final_hf:.2f}"
+                        sim.append({
+                            "HF Riesgo": f"{trig_hf:.2f}", 
+                            "Caída": f"-{drop:.2%}", 
+                            f"Precio {wt}": wp * (1-drop), 
+                            "Inyectar ($)": need, 
+                            "Nuevo HF": f"{fhf:.2f}"
                         })
-                    
+                        
                     st.dataframe(
-                        pd.DataFrame(mc_data).style.format({
-                            "Capital a Restaurar ($)": "${:,.2f}",
-                            f"Precio {w_ticker}": "${:,.2f}"
-                        }).background_gradient(subset=["Capital a Restaurar ($)"], cmap="Reds"), 
+                        pd.DataFrame(sim).style.format({
+                            "Inyectar ($)": "${:,.2f}", 
+                            f"Precio {wt}": "${:,.2f}"
+                        }).background_gradient(subset=["Inyectar ($)"], cmap="Reds"), 
                         use_container_width=True
                     )
+                else:
+                    st.error("Ya estás en liquidación.")
         else:
-            st.success("Sin deuda activa.")
+            st.success("Sin deuda.")
