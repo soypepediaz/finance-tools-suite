@@ -5,3 +5,4 @@ yfinance
 web3
 requests
 matplotlib
+jinja2
