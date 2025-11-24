@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS para limpiar la interfaz y estilizar las tarjetas
+# CSS para limpiar la interfaz
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -25,17 +25,11 @@ hide_st_style = """
             header {visibility: hidden;}
             .stDeployButton {display:none;}
             
-            /* Estilo para tarjetas de métricas */
-            div[data-testid="stMetric"] {
-                background-color: #F0F2F6;
-                padding: 15px;
-                border-radius: 10px;
-                border: 1px solid #E0E0E0;
-            }
-            
-            /* Estilo para contenedores */
+            /* Estilo para tarjetas */
             div[data-testid="column"] {
-                padding: 10px;
+                background-color: #f9f9f9;
+                border-radius: 10px;
+                padding: 15px;
             }
             </style>
             """
@@ -44,32 +38,42 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 st.title("🛡️ Looping Master: Calculadora, Backtest & On-Chain")
 
 # ==============================================================================
-#  0. GESTIÓN DE SECRETOS Y MARKETING
+#  0. GESTIÓN DE SECRETOS (BLINDADA PARA RAILWAY)
 # ==============================================================================
-
 def get_secret(key):
     """
-    Busca la clave primero en st.secrets (Local/Cloud) y luego en os.environ (Railway).
-    Esto asegura compatibilidad total en cualquier entorno.
+    Recupera una clave secreta de forma segura sin romper la app si falta el archivo.
+    Prioridad 1: Variables de Entorno (Railway).
+    Prioridad 2: Secrets TOML (Local).
     """
-    if key in st.secrets:
-        return st.secrets[key]
+    # 1. Primero intentamos leer del sistema (Railway) - Esto NO falla si no hay archivo
     if key in os.environ:
         return os.environ[key]
+    
+    # 2. Si no está, intentamos leer de st.secrets con protección
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except:
+        # Si st.secrets da error (porque no existe el archivo), devolvemos None silenciosamente
+        pass
+        
     return None
 
-# ID de la lista de Moosend (Fijo)
+# ==============================================================================
+#  MARKETING (MOOSEND)
+# ==============================================================================
 MOOSEND_LIST_ID = "75c61863-63dc-4fd3-9ed8-856aee90d04a"
 
 def add_subscriber_moosend(name, email):
     """Envía el suscriptor a la lista de Moosend vía API"""
     try:
+        # Usamos la función segura get_secret
         api_key = get_secret("MOOSEND_API_KEY")
         
         if not api_key:
             return False, "Falta configuración de API Key."
             
-        # Endpoint de suscripción
         url = f"https://api.moosend.com/v3/subscribers/{MOOSEND_LIST_ID}/subscribe.json?apikey={api_key}"
         
         headers = {
@@ -102,54 +106,36 @@ def add_subscriber_moosend(name, email):
 #  1. CONFIGURACIÓN DE REDES
 # ==============================================================================
 
-# Diccionario de Redes con RPCs robustos y Address Providers
+# Usamos el 'pool_provider' (AddressProvider) para encontrar siempre la dirección correcta del Pool
 NETWORKS = {
     "Base": {
         "chain_id": 8453,
-        "rpcs": [
-            "https://base.drpc.org",
-            "https://mainnet.base.org", 
-            "https://base-rpc.publicnode.com"
-        ],
+        "rpcs": ["https://base.drpc.org", "https://mainnet.base.org", "https://base-rpc.publicnode.com"],
         "pool_provider": "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D"
     },
     "Arbitrum": {
         "chain_id": 42161,
-        "rpcs": [
-            "https://arb1.arbitrum.io/rpc",
-            "https://rpc.ankr.com/arbitrum"
-        ],
+        "rpcs": ["https://arb1.arbitrum.io/rpc", "https://rpc.ankr.com/arbitrum"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     },
     "Ethereum": {
         "chain_id": 1,
-        "rpcs": [
-            "https://eth.llamarpc.com",
-            "https://rpc.ankr.com/eth"
-        ], 
+        "rpcs": ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth"], 
         "pool_provider": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e"
     },
     "Optimism": {
         "chain_id": 10,
-        "rpcs": [
-            "https://mainnet.optimism.io",
-            "https://rpc.ankr.com/optimism"
-        ],
+        "rpcs": ["https://mainnet.optimism.io", "https://rpc.ankr.com/optimism"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     },
     "Polygon": {
         "chain_id": 137,
-        "rpcs": [
-            "https://polygon-rpc.com",
-            "https://rpc.ankr.com/polygon"
-        ],
+        "rpcs": ["https://polygon-rpc.com", "https://rpc.ankr.com/polygon"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     },
     "Avalanche": {
         "chain_id": 43114,
-        "rpcs": [
-            "https://api.avax.network/ext/bc/C/rpc"
-        ],
+        "rpcs": ["https://api.avax.network/ext/bc/C/rpc"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     }
 }
@@ -200,19 +186,20 @@ def get_web3_session(rpc_url):
     s.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
-    # Timeout de 60s para dar tiempo a Alchemy en caso de congestión
+    # Timeout de 60s
     return Web3(Web3.HTTPProvider(rpc_url, session=s, request_kwargs={'timeout': 60}))
 
 def connect_robust(network_name):
     """Intenta conectar rotando RPCs y priorizando Secrets"""
     config = NETWORKS[network_name]
-    rpcs = config["rpcs"][:] # Copia de la lista
+    rpcs = config["rpcs"][:] # Copia de la lista para no modificar la global
     
     secret_key = f"{network_name.upper()}_RPC_URL"
     used_private = False
     
-    # Inyectar secreto (Alchemy/Infura) si existe
+    # Inyectar secreto (Alchemy/Infura) usando get_secret
     private_rpc = get_secret(secret_key)
+    
     if private_rpc:
         # Limpieza agresiva de comillas o espacios
         clean_rpc = private_rpc.strip().replace('"', '').replace("'", "")
@@ -223,11 +210,12 @@ def connect_robust(network_name):
         try:
             w3 = get_web3_session(rpc)
             if w3.is_connected():
-                # Verificación extra de Chain ID
+                # Verificación extra de Chain ID para asegurar que el nodo no miente
                 if w3.eth.chain_id == config["chain_id"]:
                     return w3, rpc, used_private
         except: 
             continue
+            
     return None, None, False
 
 # ==============================================================================
@@ -523,8 +511,7 @@ with tab_backtest:
                             is_liquidated = True
                             action = "LIQUIDATED ☠️"
                         else:
-                            # Defensa
-                            target_liq_new = defense_price * (liq_price / start_price)
+                            target_liq_new = defense_price * target_ratio
                             needed_collat_amt = debt_usd / (target_liq_new * ltv_liq)
                             add_collat_amt = needed_collat_amt - collateral_amt
                             
@@ -565,7 +552,7 @@ with tab_backtest:
                 fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Valor Estrategia"], name='Estrategia', fill='tozeroy', line=dict(color='green')))
                 fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Inversión Acumulada"], name='Inversión', line=dict(color='red', dash='dash')))
                 
-                events = df_res[df_res["Acción"].str.contains("DEFENSA", na=False)]
+                events = df_res[df_res["Acción"].str.contains("DEFENSA")]
                 if not events.empty:
                     fig.add_trace(go.Scatter(x=events.index, y=events["Valor Estrategia"], mode='markers', name='Defensa', marker=dict(color='orange', size=10, symbol='diamond')))
                 
@@ -579,11 +566,10 @@ with tab_backtest:
                 st.error(f"Error: {e}")
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 3: ESCÁNER REAL (MODO ROBUSTO + DUAL + MEMORIA)
+#  PESTAÑA 3: ESCÁNER REAL (MODO ROBUSTO + MEMORIA)
 # ------------------------------------------------------------------------------
 with tab_onchain:
     st.markdown("### 📡 Escáner Aave V3 (Modo Seguro)")
-    st.caption("Conexión ligera verificada. Elige tu modo de análisis abajo.")
     
     col_net1, col_net2 = st.columns([1, 3])
     with col_net1:
@@ -656,7 +642,6 @@ with tab_onchain:
                     sim_asset = st.selectbox("¿Cuál es tu colateral principal?", list(ASSET_MAP.keys()), key="oc_asset")
                     ticker = ASSET_MAP[sim_asset] if ASSET_MAP[sim_asset] != "MANUAL" else st.text_input("Ticker", "ETH-USD", key="oc_tick")
                 with c_par:
-                    # Umbral mínimo bajado al 5%
                     def_th = st.number_input("Umbral Defensa (%)", 5.0, step=1.0, key="oc_th") / 100.0
                     zones = st.slider("Zonas", 1, 10, 5, key="oc_z")
                     
@@ -701,13 +686,11 @@ with tab_onchain:
                         })
                         s_curr_l = targ
                         
-                    st.dataframe(
-                        pd.DataFrame(s_data).style.format({
-                            "Precio Activación": "${:,.2f}", "Costo ($)": "${:,.0f}", 
-                            "Acumulado ($)": "${:,.0f}", "Nuevo Liq": "${:,.2f}", 
-                            "Nuevo HF": "{:.2f}", "Inyectar (Tokens)": "{:.4f}"
-                        }), use_container_width=True
-                    )
+                    st.dataframe(pd.DataFrame(s_data).style.format({
+                        "Precio Activación": "${:,.2f}", "Costo ($)": "${:,.0f}", 
+                        "Acumulado ($)": "${:,.0f}", "Nuevo Liq": "${:,.2f}", 
+                        "Nuevo HF": "{:.2f}", "Inyectar (Tokens)": "{:.4f}"
+                    }), use_container_width=True)
                     
                 except Exception as ex:
                     st.error(f"Error al obtener precio: {ex}")
