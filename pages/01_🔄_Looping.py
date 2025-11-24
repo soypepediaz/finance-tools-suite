@@ -310,28 +310,21 @@ with tab_home:
     st.caption("Desarrollado con ❤️ por Campamento DeFi. DYOR.")
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 1: CALCULADORA ESTÁTICA
+#  PESTAÑA 1: CALCULADORA ESTÁTICA (MEJORADA)
 # ------------------------------------------------------------------------------
 with tab_calc:
     st.markdown("### 🧮 Simulador Estático de Defensa")
     
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
+    col_input1, col_input2, col_input3 = st.columns(3)
+    with col_input1:
         selected_asset_calc = st.selectbox("Seleccionar Activo", list(ASSET_MAP.keys()), key="sel_asset_c")
-        if ASSET_MAP[selected_asset_calc] == "MANUAL":
-            c_asset_name = st.text_input("Ticker", value="PEPE", key="c_asset_man")
-        else:
-            c_asset_name = selected_asset_calc.split("(")[1].replace(")", "")
-            
+        c_asset_name = st.text_input("Ticker", value="PEPE", key="c_asset_man") if ASSET_MAP[selected_asset_calc] == "MANUAL" else selected_asset_calc.split("(")[1].replace(")", "")
         c_price = st.number_input(f"Precio Actual {c_asset_name} ($)", value=100000.0, step=100.0, key="c_price")
         c_target = st.number_input(f"Precio Objetivo ($)", value=130000.0, step=100.0, key="c_target")
-        
-    with col2:
+    with col_input2:
         c_capital = st.number_input("Capital Inicial ($)", value=10000.0, step=1000.0, key="c_capital")
         c_leverage = st.slider("Apalancamiento (x)", 1.1, 5.0, 2.0, 0.1, key="c_lev")
-        
-    with col3:
+    with col_input3:
         c_ltv = st.slider("LTV Liquidación (%)", 50, 95, 78, 1, key="c_ltv") / 100.0
         c_threshold = st.number_input("Umbral Defensa (%)", value=15.0, step=1.0, key="c_th") / 100.0
         c_zones = st.slider("Zonas de Defensa", 1, 10, 5, key="c_zones")
@@ -341,15 +334,26 @@ with tab_calc:
     c_debt_usd = c_collat_usd - c_capital
     c_collat_amt = c_collat_usd / c_price
     
-    if c_collat_amt > 0 and c_ltv > 0:
-        c_liq_price = c_debt_usd / (c_collat_amt * c_ltv)
-        c_target_ratio = c_liq_price / c_price 
-        c_cushion_pct = (c_price - c_liq_price) / c_price
-    else:
-        c_liq_price = 0
-        c_target_ratio = 0
-        c_cushion_pct = 0
+    c_liq_price = 0
+    c_hf_initial = 0
+    c_target_ratio = 0
     
+    if c_collat_amt > 0 and c_ltv > 0 and c_debt_usd > 0:
+        c_liq_price = c_debt_usd / (c_collat_amt * c_ltv)
+        c_hf_initial = (c_collat_usd * c_ltv) / c_debt_usd
+        c_target_ratio = c_liq_price / c_price 
+    elif c_debt_usd == 0:
+        c_hf_initial = 999.0
+        
+    # --- PANEL DE MÉTRICAS (RECUPERADO) ---
+    st.divider()
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Salud Inicial (HF)", f"{c_hf_initial:.2f}", delta="OK" if c_hf_initial>1.1 else "Riesgo")
+    m2.metric("Precio Liquidación", f"${c_liq_price:,.2f}")
+    m3.metric("Colateral Total", f"${c_collat_usd:,.2f}")
+    m4.metric("Deuda Total", f"${c_debt_usd:,.2f}")
+    st.divider()
+
     # Generación de tabla en cascada
     cascade_data = []
     curr_collat = c_collat_amt
@@ -361,43 +365,41 @@ with tab_calc:
         drop_pct = (c_price - trig_p) / c_price
         targ_liq = trig_p * c_target_ratio
         
+        # Estado en el momento del trigger (antes de defender)
+        val_at_trigger = curr_collat * trig_p
+        hf_at_trigger = (val_at_trigger * c_ltv) / c_debt_usd if c_debt_usd > 0 else 999
+        
+        # Apalancamiento en el momento del trigger
+        equity_at_trigger = val_at_trigger - c_debt_usd
+        lev_at_trigger = val_at_trigger / equity_at_trigger if equity_at_trigger > 0 else 999
+        
+        # Cálculo defensa
         if targ_liq > 0:
             need_col = c_debt_usd / (targ_liq * c_ltv)
-            add_col = need_col - curr_collat
+            add_col = max(0, need_col - curr_collat)
         else:
             add_col = 0
             
-        add_col = max(0, add_col)
-        
         cost = add_col * trig_p
         cum_cost += cost
         curr_collat += add_col
         
-        # Métricas financieras
+        # Métricas financieras finales
         total_inv = c_capital + cum_cost
         final_val = curr_collat * c_target
         net_prof = (final_val - c_debt_usd) - total_inv
+        roi = (net_prof / total_inv) * 100 if total_inv > 0 else 0
+        ratio = roi / (drop_pct * 100) if drop_pct > 0 else 0
         
-        if total_inv > 0:
-            roi = (net_prof / total_inv) * 100
-        else:
-            roi = 0
-            
-        if drop_pct > 0:
-            ratio = roi / (drop_pct * 100)
-        else:
-            ratio = 0
-        
-        # Nuevo HF
-        if c_debt_usd > 0:
-            new_hf = ((curr_collat * trig_p) * c_ltv) / c_debt_usd
-        else:
-            new_hf = 999
+        # Nuevo HF tras defensa
+        new_hf = ((curr_collat * trig_p) * c_ltv) / c_debt_usd if c_debt_usd > 0 else 999
         
         cascade_data.append({
             "Zona": f"#{i}", 
             "Precio Activación": trig_p, 
             "Caída (%)": drop_pct, 
+            "Apalancamiento (x)": lev_at_trigger,  # <--- NUEVO
+            "HF (Pre-Defensa)": hf_at_trigger,     # <--- NUEVO
             "Inversión Extra ($)": cost, 
             "Total Invertido ($)": total_inv, 
             "Nuevo P. Liq": targ_liq, 
@@ -408,11 +410,13 @@ with tab_calc:
         })
         curr_liq = targ_liq
 
-    st.divider()
+    st.subheader("🛡️ Plan de Defensa Escalonado")
     st.dataframe(
         pd.DataFrame(cascade_data).style.format({
             "Precio Activación": "${:,.2f}", 
             "Caída (%)": "{:.2%}", 
+            "Apalancamiento (x)": "{:.2f}x",
+            "HF (Pre-Defensa)": "{:.2f}",
             "Inversión Extra ($)": "${:,.0f}", 
             "Total Invertido ($)": "${:,.0f}", 
             "Nuevo P. Liq": "${:,.2f}", 
@@ -420,7 +424,7 @@ with tab_calc:
             "Beneficio ($)": "${:,.0f}", 
             "ROI (%)": "{:.2f}%", 
             "Ratio": "{:.2f}"
-        }), 
+        }).background_gradient(subset=["HF (Pre-Defensa)"], cmap="RdYlGn"), 
         use_container_width=True
     )
     
@@ -429,8 +433,6 @@ with tab_calc:
         last_row = pd.DataFrame(cascade_data).iloc[-1]
         st.markdown(f"""
         ### 📝 Informe Ejecutivo
-        **Configuración Inicial:** Capital: **\${c_capital:,.0f}** | Apalancamiento: **{c_leverage}x** | Precio Liq. Inicial: **\${c_liq_price:,.2f}**.
-        
         **Escenario Extremo:** Si el mercado cae un **{last_row['Caída (%)']:.1%}**, necesitarás haber inyectado un total de **\${last_row['Total Invertido ($)']-c_capital:,.0f}** para sobrevivir. Si tras eso el precio recupera al objetivo, tu ROI sería del **{last_row['ROI (%)']:.2f}%**.
         """)
 
