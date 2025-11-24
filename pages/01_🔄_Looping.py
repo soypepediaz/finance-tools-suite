@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from web3 import Web3
 import requests
 import json
-import os
+import os  # <--- NECESARIO PARA RAILWAY
 
 # ==============================================================================
 #  CONFIGURACIÓN DE LA PÁGINA Y ESTILOS
@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS para limpiar la interfaz, ocultar marcas de Streamlit y estilizar
+# CSS para limpiar la interfaz
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -25,18 +25,11 @@ hide_st_style = """
             header {visibility: hidden;}
             .stDeployButton {display:none;}
             
-            /* Estilo para tarjetas de métricas */
-            div[data-testid="stMetric"] {
-                background-color: #F0F2F6;
-                padding: 15px;
+            /* Estilo para tarjetas */
+            div[data-testid="column"] {
+                background-color: #f9f9f9;
                 border-radius: 10px;
-                text-align: center;
-                border: 1px solid #E0E0E0;
-            }
-            
-            /* Estilo para contenedores */
-            div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
-                gap: 1rem;
+                padding: 20px;
             }
             </style>
             """
@@ -45,23 +38,31 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 st.title("🛡️ Looping Master: Calculadora, Backtest & On-Chain")
 
 # ==============================================================================
-#  0. CONFIGURACIÓN MARKETING (MOOSEND)
+#  0. GESTIÓN DE SECRETOS (COMPATIBLE STREAMLIT CLOUD Y RAILWAY)
 # ==============================================================================
-MOOSEND_LIST_ID = "75c61863-63dc-4fd3-9ed8-856aee90d04a"
-
 def get_secret(key):
-    """Intenta leer de st.secrets de forma segura"""
+    """Busca la clave primero en st.secrets (Local/Cloud) y luego en os.environ (Railway)"""
+    # 1. Intentar Streamlit Secrets
     if key in st.secrets:
         return st.secrets[key]
+    # 2. Intentar Variables de Entorno (Railway)
+    if key in os.environ:
+        return os.environ[key]
     return None
+
+# ==============================================================================
+#  1. CONFIGURACIÓN MARKETING (MOOSEND)
+# ==============================================================================
+MOOSEND_LIST_ID = "75c61863-63dc-4fd3-9ed8-856aee90d04a"
 
 def add_subscriber_moosend(name, email):
     """Envía el suscriptor a la lista de Moosend vía API"""
     try:
+        # Usamos la nueva función get_secret
         api_key = get_secret("MOOSEND_API_KEY")
         
         if not api_key:
-            return False, "Falta configuración de API Key en Secrets."
+            return False, "Falta configuración de API Key (Secrets/Env)."
             
         # Endpoint de suscripción de Moosend
         url = f"https://api.moosend.com/v3/subscribers/{MOOSEND_LIST_ID}/subscribe.json?apikey={api_key}"
@@ -93,58 +94,39 @@ def add_subscriber_moosend(name, email):
         return False, str(e)
 
 # ==============================================================================
-#  1. CONFIGURACIÓN DE REDES Y CONTRATOS
+#  2. CONFIGURACIÓN DE REDES Y CONTRATOS
 # ==============================================================================
 
-# Diccionario de Redes: Usamos el 'pool_provider' (AddressProvider) 
-# para encontrar siempre la dirección correcta del Pool dinámicamente.
+# Usamos el 'pool_provider' (AddressProvider) para encontrar siempre la dirección correcta del Pool
 NETWORKS = {
     "Base": {
         "chain_id": 8453,
-        "rpcs": [
-            "https://base.drpc.org",
-            "https://mainnet.base.org", 
-            "https://base-rpc.publicnode.com"
-        ],
+        "rpcs": ["https://base.drpc.org", "https://mainnet.base.org", "https://base-rpc.publicnode.com"],
         "pool_provider": "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D"
     },
     "Arbitrum": {
         "chain_id": 42161,
-        "rpcs": [
-            "https://arb1.arbitrum.io/rpc",
-            "https://rpc.ankr.com/arbitrum"
-        ],
+        "rpcs": ["https://arb1.arbitrum.io/rpc", "https://rpc.ankr.com/arbitrum"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     },
     "Ethereum": {
         "chain_id": 1,
-        "rpcs": [
-            "https://eth.llamarpc.com",
-            "https://rpc.ankr.com/eth"
-        ], 
+        "rpcs": ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth"], 
         "pool_provider": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e"
     },
     "Optimism": {
         "chain_id": 10,
-        "rpcs": [
-            "https://mainnet.optimism.io",
-            "https://rpc.ankr.com/optimism"
-        ],
+        "rpcs": ["https://mainnet.optimism.io", "https://rpc.ankr.com/optimism"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     },
     "Polygon": {
         "chain_id": 137,
-        "rpcs": [
-            "https://polygon-rpc.com",
-            "https://rpc.ankr.com/polygon"
-        ],
+        "rpcs": ["https://polygon-rpc.com", "https://rpc.ankr.com/polygon"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     },
     "Avalanche": {
         "chain_id": 43114,
-        "rpcs": [
-            "https://api.avax.network/ext/bc/C/rpc"
-        ],
+        "rpcs": ["https://api.avax.network/ext/bc/C/rpc"],
         "pool_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
     }
 }
@@ -176,7 +158,7 @@ AAVE_ABI = [
     }
 ]
 
-# Mapeo de activos para los selectores de la UI
+# Mapeo de activos para los selectores
 ASSET_MAP = {
     "Bitcoin (WBTC/BTC)": "BTC-USD", 
     "Ethereum (WETH/ETH)": "ETH-USD", 
@@ -188,28 +170,29 @@ ASSET_MAP = {
 }
 
 # ==============================================================================
-#  2. FUNCIONES AUXILIARES (CONEXIÓN ROBUSTA)
+#  3. FUNCIONES AUXILIARES (CONEXIÓN ROBUSTA)
 # ==============================================================================
 
 def get_web3_session(rpc_url):
-    """Crea una sesión Web3 disfrazada de navegador Chrome para evitar bloqueos de WAF"""
+    """Crea una sesión Web3 disfrazada de navegador Chrome"""
     s = requests.Session()
     s.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
-    # Timeout de 60s para dar tiempo a Alchemy/Nodos en momentos de congestión
+    # Timeout extendido
     return Web3(Web3.HTTPProvider(rpc_url, session=s, request_kwargs={'timeout': 60}))
 
 def connect_robust(network_name):
-    """Intenta conectar rotando RPCs y priorizando Secrets"""
+    """Intenta conectar rotando RPCs y priorizando Variables de Entorno (Railway)"""
     config = NETWORKS[network_name]
     rpcs = config["rpcs"][:] # Copia de la lista para no modificar la global
     
     secret_key = f"{network_name.upper()}_RPC_URL"
     used_private = False
     
-    # Inyectar secreto (Alchemy/Infura) si existe en los Secrets
+    # Inyectar secreto (Alchemy/Infura) usando la función compatible
     private_rpc = get_secret(secret_key)
+    
     if private_rpc:
         # Limpieza agresiva de comillas o espacios que suelen colarse al copiar
         clean_rpc = private_rpc.strip().replace('"', '').replace("'", "")
@@ -229,7 +212,7 @@ def connect_robust(network_name):
     return None, None, False
 
 # ==============================================================================
-#  3. INTERFAZ DE USUARIO (PESTAÑAS)
+#  4. INTERFAZ DE USUARIO (PESTAÑAS)
 # ==============================================================================
 
 tab_home, tab_calc, tab_backtest, tab_onchain = st.tabs([
@@ -400,10 +383,16 @@ with tab_calc:
         else:
             roi = 0
             
-        ratio = roi / (drop_pct * 100) if drop_pct > 0 else 0
+        if drop_pct > 0:
+            ratio = roi / (drop_pct * 100)
+        else:
+            ratio = 0
         
         # Nuevo HF
-        new_hf = ((curr_collat * trig_p) * c_ltv) / c_debt_usd if c_debt_usd > 0 else 999
+        if c_debt_usd > 0:
+            new_hf = ((curr_collat * trig_p) * c_ltv) / c_debt_usd
+        else:
+            new_hf = 999
         
         cascade_data.append({
             "Zona": f"#{i}", 
@@ -485,7 +474,6 @@ with tab_backtest:
                 start_date_actual = df_hist.index[0].date()
                 start_price = float(df_hist.iloc[0]['Close']) 
                 
-                # Estado inicial
                 collateral_usd = bt_capital * bt_leverage
                 debt_usd = collateral_usd - bt_capital 
                 collateral_amt = collateral_usd / start_price 
@@ -500,7 +488,6 @@ with tab_backtest:
                 
                 for date_idx, row in df_hist.iterrows():
                     if pd.isna(row['Close']): continue
-                    
                     low_val = float(row['Low'])
                     close_val = float(row['Close'])
                     open_val = float(row['Open'])
@@ -508,7 +495,6 @@ with tab_backtest:
                     trigger_price = liq_price * (1 + bt_threshold)
                     action = "Hold"
                     
-                    # Lógica de liquidación y defensa
                     if low_val <= trigger_price and not is_liquidated:
                         defense_price = min(open_val, trigger_price) 
                         
@@ -516,8 +502,7 @@ with tab_backtest:
                             is_liquidated = True
                             action = "LIQUIDATED ☠️"
                         else:
-                            # Ejecutar defensa histórica
-                            target_liq_new = defense_price * (liq_price / start_price)
+                            target_liq_new = defense_price * target_ratio
                             needed_collat_amt = debt_usd / (target_liq_new * ltv_liq)
                             add_collat_amt = needed_collat_amt - collateral_amt
                             
@@ -558,7 +543,7 @@ with tab_backtest:
                 fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Valor Estrategia"], name='Estrategia', fill='tozeroy', line=dict(color='green')))
                 fig.add_trace(go.Scatter(x=df_res.index, y=df_res["Inversión Acumulada"], name='Inversión', line=dict(color='red', dash='dash')))
                 
-                events = df_res[df_res["Acción"].str.contains("DEFENSA", na=False)]
+                events = df_res[df_res["Acción"].str.contains("DEFENSA")]
                 if not events.empty:
                     fig.add_trace(go.Scatter(x=events.index, y=events["Valor Estrategia"], mode='markers', name='Defensa', marker=dict(color='orange', size=10, symbol='diamond')))
                 
@@ -572,7 +557,7 @@ with tab_backtest:
                 st.error(f"Error: {e}")
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 3: ESCÁNER REAL (MODO ROBUSTO + MEMORIA)
+#  PESTAÑA 3: ESCÁNER REAL (MODO ROBUSTO + DUAL + MEMORIA)
 # ------------------------------------------------------------------------------
 with tab_onchain:
     st.markdown("### 📡 Escáner Aave V3 (Modo Seguro)")
@@ -584,7 +569,7 @@ with tab_onchain:
     with col_net2:
         addr = st.text_input("Wallet Address (0x...)", placeholder="0x...")
     
-    # --- GESTIÓN DE ESTADO (MEMORIA) ---
+    # --- GESTIÓN DE ESTADO (MEMORIA DE SESIÓN) ---
     if 'portfolio_data' not in st.session_state:
         st.session_state.portfolio_data = None
 
@@ -598,7 +583,7 @@ with tab_onchain:
                     st.error("Error conexión RPC. Revisa tus Secrets."); st.stop()
                 
                 try:
-                    # 1. Obtener Pool Real (AddressProvider)
+                    # 1. Obtener Pool Real
                     prov_addr = w3.to_checksum_address(NETWORKS[net]["pool_provider"])
                     prov_contract = w3.eth.contract(address=prov_addr, abi=AAVE_ABI)
                     pool_addr = prov_contract.functions.getPool().call()
@@ -634,7 +619,7 @@ with tab_onchain:
             st.divider()
             st.subheader("🛠️ Estrategia de Defensa")
             
-            # SELECTOR DE MODO (Persistente)
+            # SELECTOR DE MODO
             mode = st.radio("Tipo de Posición:", 
                             ["🛡️ Activo Único (Detallado con Precios)", 
                              "💼 Multi-Colateral (Plan Preventivo por Salud)"], 
@@ -649,6 +634,7 @@ with tab_onchain:
                     sim_asset = st.selectbox("¿Cuál es tu colateral principal?", list(ASSET_MAP.keys()), key="oc_asset")
                     ticker = ASSET_MAP[sim_asset] if ASSET_MAP[sim_asset] != "MANUAL" else st.text_input("Ticker", "ETH-USD", key="oc_tick")
                 with c_par:
+                    # Umbral mínimo bajado al 5%
                     def_th = st.number_input("Umbral Defensa (%)", 5.0, step=1.0, key="oc_th") / 100.0
                     zones = st.slider("Zonas", 1, 10, 5, key="oc_z")
                     
@@ -670,7 +656,7 @@ with tab_onchain:
                         trig = s_curr_l * (1 + def_th)
                         targ = trig * ratio_target
                         
-                        # Cantidad necesaria para bajar liquidación al target
+                        # Cantidad necesaria
                         needed_amt = d['debt_usd'] / (targ * d['lt_avg'])
                         add_amt = max(0, needed_amt - s_curr_c)
                         
@@ -693,19 +679,17 @@ with tab_onchain:
                         })
                         s_curr_l = targ
                         
-                    st.dataframe(
-                        pd.DataFrame(s_data).style.format({
-                            "Precio Activación": "${:,.2f}", "Costo ($)": "${:,.0f}", 
-                            "Acumulado ($)": "${:,.0f}", "Nuevo Liq": "${:,.2f}", 
-                            "Nuevo HF": "{:.2f}", "Inyectar (Tokens)": "{:.4f}"
-                        }), use_container_width=True
-                    )
+                    st.dataframe(pd.DataFrame(s_data).style.format({
+                        "Precio Activación": "${:,.2f}", "Costo ($)": "${:,.0f}", 
+                        "Acumulado ($)": "${:,.0f}", "Nuevo Liq": "${:,.2f}", 
+                        "Nuevo HF": "{:.2f}", "Inyectar (Tokens)": "{:.4f}"
+                    }), use_container_width=True)
                     
                 except Exception as ex:
-                    st.error(f"Error al obtener precio: {ex}")
+                    st.error(f"Error precio: {ex}")
 
             # ==================================================================
-            # MODO B: MULTI-COLATERAL (LÓGICA PREVENTIVA)
+            # MODO B: MULTI-COLATERAL (LÓGICA PREVENTIVA DE SALUD)
             # ==================================================================
             else:
                 st.info("Planificación preventiva basada en caída de Salud (Health Factor).")
@@ -719,8 +703,7 @@ with tab_onchain:
                 
                 try:
                     w_price = yf.Ticker(w_ticker).history(period="1d")['Close'].iloc[-1]
-                except: 
-                    w_price = 0
+                except: w_price = 0
 
                 current_hf = d['hf']
                 
@@ -738,21 +721,19 @@ with tab_onchain:
                         trigger_hf = current_hf - (hf_step * i)
                         if trigger_hf <= 1.001: trigger_hf = 1.001
                         
-                        # Caída necesaria para llegar ahí
+                        # Caída necesaria
                         drop_pct = 1 - (trigger_hf / current_hf)
                         
                         # Cálculos de restauración
                         shocked_col = d['col_usd'] * (1 - drop_pct)
                         shocked_lt_val = (d['col_usd'] * d['lt_avg']) * (1 - drop_pct)
                         
-                        # Capital necesario para volver al HF Original
+                        # Capital para volver al HF Original
                         needed_capital = d['debt_usd'] - (shocked_lt_val / current_hf)
                         if needed_capital < 0: needed_capital = 0
                         
-                        # Precio testigo
                         w_price_shock = w_price * (1 - drop_pct)
                         
-                        # Nuevo HF real tras inyección
                         final_debt = d['debt_usd'] - needed_capital
                         if final_debt > 0:
                             final_hf = (shocked_col * d['lt_avg']) / final_debt
