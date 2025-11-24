@@ -227,64 +227,71 @@ tab_home, tab_calc, tab_backtest, tab_onchain = st.tabs([
 ])
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 0: PORTADA
+#  PESTAÑA 0: PORTADA (DISEÑO RECUPERADO 3 COLUMNAS)
 # ------------------------------------------------------------------------------
 with tab_home:
-    col_hero_L, col_hero_R = st.columns([2, 1])
+    # Título Principal Centrado
+    st.markdown("# 🛡️ Looping Master Pro")
+    st.markdown("#### Maximiza rendimientos, minimiza riesgos.")
+    st.markdown("""
+    Bienvenido a la suite definitiva para la gestión de posiciones apalancadas en DeFi.
+    Esta herramienta te permite auditar, simular y proteger tus inversiones en Aave con precisión matemática.
+    """)
     
-    with col_hero_L:
-        st.markdown("# 🛡️ Domina el Looping en DeFi")
-        st.markdown("#### Maximiza tus rendimientos sin morir en el intento.")
-        
-        st.markdown("""
-        Bienvenido a **Looping Master**, la herramienta definitiva para analizar, proyectar y 
-        defender tus posiciones apalancadas en Aave y otros protocolos.
-        """)
-        
-        st.markdown("""
-        * 🧮 **Calculadora:** Proyecta rentabilidades y puntos de liquidación.
-        * 📉 **Backtest:** Valida tu estrategia con datos históricos reales.
-        * 📡 **Escáner:** Audita tu cartera real en Blockchain y simula "Crash Tests".
-        """)
-        
-        st.info("💡 **Tip:** Navega por las pestañas superiores para usar las herramientas.")
+    st.divider()
 
-    with col_hero_R:
-        with st.container(border=True):
-            st.markdown("### ⛺ Campamento DeFi")
-            st.caption("Tu comunidad de Estrategias On-Chain.")
-            st.metric("Nivel de Riesgo", "Gestionado", delta="Alto Rendimiento")
-            st.markdown("*Aprende a rentabilizar tus activos de forma segura.*")
+    # --- GRID DE 3 COLUMNAS (DISEÑO LIMPIO) ---
+    col_f1, col_f2, col_f3 = st.columns(3)
+
+    with col_f1:
+        st.info("🧮 **Calculadora**")
+        st.markdown("Diseña tu estrategia **antes de invertir**.")
+        st.markdown("- Proyecta tu precio de liquidación.")
+        st.markdown("- Calcula tu ROI potencial.")
+        st.markdown("- Planifica tu defensa en cascada.")
+
+    with col_f2:
+        st.warning("📉 **Backtesting**")
+        st.markdown("Valida tu tesis con **datos históricos**.")
+        st.markdown("- ¿Habría sobrevivido tu estrategia en 2022?")
+        st.markdown("- Simula la volatilidad real.")
+        st.markdown("- Calcula el capital necesario.")
+
+    with col_f3:
+        st.error("📡 **Escáner Real**")
+        st.markdown("Conéctate a la **Blockchain en tiempo real**.")
+        st.markdown("- Audita tu posición en Base, Arbitrum, etc.")
+        st.markdown("- Detecta tu Salud (HF) real.")
+        st.markdown("- Simula un crash de mercado.")
 
     st.divider()
 
-    # Lead Magnet
-    c_lead_L, c_lead_R = st.columns([1.5, 1])
+    # --- LEAD MAGNET (INTEGRADO ABAJO) ---
+    st.markdown("### 🎓 Aprende a dominar estas estrategias")
     
-    with c_lead_L:
-        st.markdown("### 🎓 Aprende a dominar estas estrategias")
+    col_lead_L, col_lead_R = st.columns([1.5, 1], gap="large")
+    
+    with col_lead_L:
         st.markdown("""
-        Esta herramienta es solo la punta del iceberg. En el **Campamento DeFi** compartimos:
-        - Estrategias de Yield Farming avanzadas.
-        - Alertas de seguridad y gestión de riesgo.
-        - Herramientas exclusivas para miembros.
+        Esta herramienta ha sido desarrollada por el equipo de **Campamento DeFi**.
         
-        **¿Quieres conocer más en detalle otras estrategias como esta? Pues es muy fácil (3 pasos):**
+        El *Looping Avanzado* es solo una de las múltiples estrategias que enseñamos para rentabilizar tus activos onchain de forma segura.
         
-        **Paso 1.** 📘 Rellenas el formulario con tus datos.
+        **¿Quieres conocer más en detalle otras estrategias como esta? (3 pasos):**
         
-        **Paso 2.** 🚨 Revisa tu bandeja de entrada. Algunos gestores de correo se equivocan y nos meten en la carpeta de spam.
-        
-        **Paso 3.** 🛠️ Te iremos informando de nuevas herramientas.
+        1.  📘 Rellena el formulario con tus datos.
+        2.  🚨 Revisa tu bandeja de entrada (mira en spam).
+        3.  🛠️ Te iremos informando de nuevas herramientas y estrategias.
         """)
-        
-    with c_lead_R:
+    
+    with col_lead_R:
         with st.container(border=True):
-            st.markdown("#### 📩 Paso 1, aquí")
-            with st.form("lead_magnet_form_home"):
+            st.markdown("#### 📩 Recibir Guía Gratuita")
+            with st.form("lead_magnet_form_looping"):
                 name_input = st.text_input("Nombre", placeholder="Tu nombre")
                 email_input = st.text_input("Email", placeholder="tu@email.com")
                 
+                # Botón de acción principal
                 submitted = st.form_submit_button("¡Quiero aprender!", type="primary", use_container_width=True)
                 
                 if submitted:
@@ -296,12 +303,11 @@ with tab_home:
                             st.success(f"¡Genial, {name_input}! Revisa tu correo ahora.")
                             st.balloons()
                         else:
-                            st.error(f"Hubo un error técnico al suscribirte: {msg}")
+                            st.error(f"Hubo un error técnico: {msg}")
                     else:
                         st.warning("Por favor, introduce un email válido.")
     
-    st.divider()
-    st.caption("Desarrollado con ❤️ por el equipo de Campamento DeFi. DYOR.")
+    st.caption("Desarrollado con ❤️ por Campamento DeFi. DYOR.")
 
 # ------------------------------------------------------------------------------
 #  PESTAÑA 1: CALCULADORA ESTÁTICA
