@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from scipy.stats import norm
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Liquidity Optimizer", layout="wide")
+st.set_page_config(page_title="Liquidity Monte Carlo", layout="wide")
 
-st.title("🧪 Optimizador de Liquidez Concentrada")
+st.title("🎲 Optimizador de Liquidez (Montecarlo)")
 st.markdown("---")
 
 # --- SIDEBAR: PARÁMETROS ---
@@ -16,209 +15,237 @@ with st.sidebar:
     
     # 1. Datos del Activo
     st.subheader("Simulación de Mercado")
-    precio_actual = st.number_input("Precio Inicial ($)", value=1000.0)
+    precio_actual = st.number_input("Precio Inicial ($)", value=65000.0)
     volatilidad_anual = st.slider("Volatilidad Anual (%)", 10, 200, 80) / 100
-    tendencia_anual = st.slider("Tendencia Anual (%)", -50, 150, 20) / 100
+    tendencia_anual = st.slider("Tendencia Anual (%)", -50, 150, 0) / 100
     
     # 2. Parámetros de la Estrategia
     st.subheader("Estrategia")
-    dias_analisis = st.slider("Días a simular", 7, 365, 30, step=1)
-    apr_estimado = st.number_input("APR Pool Estimado (%)", value=40.0) / 100
-    gas_rebalanceo = st.number_input("Coste Gas por Rebalanceo ($)", value=15.0)
+    n_simulaciones = st.slider("Nº Simulaciones (Montecarlo)", 50, 1000, 200, step=50)
+    dias_analisis = st.slider("Días a simular", 7, 365, 90, step=1)
+    apr_estimado = st.number_input("APR Pool Estimado (%)", value=50.0) / 100
+    gas_rebalanceo = st.number_input("Coste Gas por Rebalanceo ($)", value=5.0)
     capital_inicial = st.number_input("Capital a Invertir ($)", value=10000.0)
 
     # 3. Bollinger (Rangos)
     st.subheader("Definición de Rangos")
-    bb_window = st.selectbox("Media Móvil (Días)", [7, 14, 30, 60, 90], index=2)
+    bb_window = st.selectbox("Media Móvil (Días)", [7, 14, 30, 60], index=2)
     bb_std = st.slider("Desviaciones (SD)", 0.5, 4.0, 2.0, 0.1)
 
-# --- FUNCIONES CORE (LÓGICA) ---
+# --- NÚCLEO MATEMÁTICO (OPTIMIZADO CON NUMPY) ---
 
-def generar_datos_mercado(precio, vol, tendencia, dias):
-    """Genera una serie de precios simulada (Geometric Brownian Motion)"""
+def generar_montecarlo_precios(precio, vol, tendencia, dias, n_sims):
+    """
+    Genera una matriz de precios (dias x simulaciones) usando NumPy vectorizado.
+    Es muchísimo más rápido que hacer un bucle for 1000 veces.
+    """
     dt = 1/365
-    precios = [precio]
     mu = tendencia
     sigma = vol
     
-    for _ in range(dias):
-        shock = np.random.normal(0, 1)
-        # Fórmula GBM: P_t = P_t-1 * exp((mu - 0.5*sigma^2)*dt + sigma*sqrt(dt)*Z)
-        cambio = (mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * shock
-        precios.append(precios[-1] * np.exp(cambio))
-        
-    return pd.DataFrame(precios, columns=['close'])
+    # Generamos todos los shocks aleatorios de golpe
+    # Shape: (dias, n_sims)
+    shocks = np.random.normal(0, 1, (dias, n_sims))
+    
+    # Cálculo vectorial del movimiento browniano
+    drift = (mu - 0.5 * sigma**2) * dt
+    diffusion = sigma * np.sqrt(dt) * shocks
+    
+    # Retornos logarítmicos acumulados
+    log_retornos = np.cumsum(drift + diffusion, axis=0)
+    
+    # Precios
+    precios = precio * np.exp(log_retornos)
+    
+    # Insertamos la fila inicial (Día 0) con el precio original
+    fila_cero = np.full((1, n_sims), precio)
+    precios = np.vstack([fila_cero, precios])
+    
+    return precios
 
-def calcular_bollinger(df, window, std_dev):
-    df['sma'] = df['close'].rolling(window=window).mean()
-    df['std'] = df['close'].rolling(window=window).std()
-    df['upper'] = df['sma'] + (df['std'] * std_dev)
-    df['lower'] = df['sma'] - (df['std'] * std_dev)
-    # Rellenamos NaN iniciales con el primer valor calculado válido para que no rompa
-    df = df.bfill() 
-    return df
-
-def simular_comparativa(df, cap_inicial, apr, gas, window, std_dev):
-    
-    # --- PREPARACIÓN ---
-    # Usamos los primeros 'window' días para calentar el indicador, la simulación empieza después
-    if len(df) <= window:
-        st.error("Necesitamos más días de datos para calcular la media móvil inicial.")
-        return None
-        
-    # Calculamos bandas para todo el dataset
-    df_bb = calcular_bollinger(df.copy(), window, std_dev)
-    
-    # Cortamos el DF para empezar la simulación "hoy" (usando datos pasados para la primera banda)
-    # Para simplificar visualización, simularemos sobre todo el periodo generado
-    # asumiendo que el día 0 ya tenemos bandas
-    
-    # --- ESTRATEGIA ESTÁTICA ---
-    rango_inicial = df_bb.iloc[0]
-    p_min_st = rango_inicial['lower']
-    p_max_st = rango_inicial['upper']
-    
-    cap_estatico = cap_inicial
-    fees_estatico = 0
-    dias_rango_st = 0
-    
-    # --- ESTRATEGIA DINÁMICA ---
-    cap_dinamico = cap_inicial
-    fees_dinamico = 0
-    gas_gastado = 0
-    rebalanceos = 0
-    p_min_dyn = p_min_st
-    p_max_dyn = p_max_st
-    
+def ejecutar_analisis_montecarlo(precios_matrix, cap_inicial, apr, gas, window, std_dev):
+    """
+    Analiza las estrategias sobre la matriz de precios completa.
+    """
+    filas, columnas = precios_matrix.shape # (dias, n_sims)
     fee_diario = apr / 365
     
-    historia_dinamica = [] # Para graficar el valor del portfolio en el tiempo
+    resultados_estatica = []
+    resultados_dinamica = []
     
-    for i, row in df_bb.iterrows():
-        precio = row['close']
-        
-        # 1. ESTÁTICA
-        if p_min_st <= precio <= p_max_st:
-            fees_estatico += cap_estatico * fee_diario
-            dias_rango_st += 1
-            
-        # Valoración simple Estática (aprox IL)
-        # Si se sale por arriba, valor bloqueado en p_max (todo stable)
-        # Si se sale por abajo, valor cae con el activo
-        val_estatico_hoy = cap_inicial # Empezamos asumiendo valor estable
-        if precio > p_max_st:
-            val_estatico_hoy = cap_inicial # Capped
-        elif precio < p_min_st:
-            val_estatico_hoy = cap_inicial * (precio / p_min_st)
-        
-        # 2. DINÁMICA
-        in_range_dyn = p_min_dyn <= precio <= p_max_dyn
-        
-        if in_range_dyn:
-            fees_dinamico += cap_dinamico * fee_diario
-        else:
-            # Rebalanceo
-            rebalanceos += 1
-            gas_gastado += gas
-            
-            # Realizar IL (Aproximación simplificada)
-            if precio > p_max_dyn:
-                 # Salida por arriba: Tenemos todo en Stable, valor preservado nominalmente
-                 pass 
-            elif precio < p_min_dyn:
-                 # Salida por abajo: Tenemos todo en Token, el valor ha caído
-                 cap_dinamico = cap_dinamico * (precio / p_min_dyn)
-            
-            # Resetear rangos
-            # Nota: En la vida real el rango depende de la volatilidad DE ESE MOMENTO
-            # Aquí usamos las bandas calculadas en ese día 'i'
-            p_min_dyn = row['lower']
-            p_max_dyn = row['upper']
-            
-        historia_dinamica.append(cap_dinamico + fees_dinamico - gas_gastado)
+    # Barra de progreso porque esto puede tardar un poco si N es grande
+    progress_bar = st.progress(0)
+    
+    # Para calcular bandas de Bollinger necesitamos un "calentamiento"
+    # Como no tenemos historia previa en la simulación, usaremos una aproximación
+    # expandiendo la ventana progresivamente o asumiendo volatilidad inicial.
+    # Para simplificar en Montecarlo, calcularemos las bandas sobre la marcha.
 
-    # Resultados Finales
-    total_estatico = val_estatico_hoy + fees_estatico
-    total_dinamico = cap_dinamico + fees_dinamico - gas_gastado
-    
-    return {
-        "estatica": {
-            "total": total_estatico,
-            "fees": fees_estatico,
-            "dias_in": dias_rango_st,
-            "rango": (p_min_st, p_max_st)
-        },
-        "dinamica": {
-            "total": total_dinamico,
-            "fees": fees_dinamico,
-            "gas": gas_gastado,
-            "rebalanceos": rebalanceos,
-            "history": historia_dinamica
-        }
-    }
+    for sim_idx in range(columnas):
+        # Actualizar barra cada 10%
+        if sim_idx % (columnas // 10) == 0:
+            progress_bar.progress(sim_idx / columnas)
+            
+        serie_precios = precios_matrix[:, sim_idx]
+        
+        # --- ESTRATEGIA ESTÁTICA ---
+        # Definimos rango el día 0 basándonos en precio inicial y volatilidad teórica
+        # (Es una simplificación válida para día 0)
+        # Rango basado en la volatilidad input del usuario para el día 0
+        rango_pct_inicial = std_dev * (volatilidad_anual / np.sqrt(365)) * np.sqrt(window)
+        # Ojo: Bollinger real usa la std de los ultimos X días. 
+        # Aquí simularemos un rango fijo del +/- X%
+        p_base = serie_precios[0]
+        # Aproximación de banda inicial: 
+        # Si la vol es 80%, en 30 días la desviación esperada es aprox 80% * sqrt(30/365)
+        std_aprox = p_base * (volatilidad_anual * np.sqrt(window/365))
+        
+        p_min_st = p_base - (std_dev * std_aprox)
+        p_max_st = p_base + (std_dev * std_aprox)
+        
+        # Vectorizamos el chequeo de "In Range" para la estática
+        in_range_st_mask = (serie_precios >= p_min_st) & (serie_precios <= p_max_st)
+        dias_in_st = np.sum(in_range_st_mask)
+        fees_st = dias_in_st * (cap_inicial * fee_diario) # Simplificación: Fees sobre capital inicial
+        
+        # Valor final del principal (IL)
+        p_final = serie_precios[-1]
+        val_prin_st = cap_inicial
+        if p_final < p_min_st:
+            val_prin_st = cap_inicial * (p_final / p_min_st)
+        elif p_final > p_max_st:
+            val_prin_st = cap_inicial # Capped en stable
+            
+        resultados_estatica.append(val_prin_st + fees_st)
+        
+        # --- ESTRATEGIA DINÁMICA (Bucle simplificado) ---
+        # Aquí sí necesitamos iterar porque el rebalanceo depende del estado anterior
+        cap_dyn = cap_inicial
+        fees_dyn = 0
+        gas_total = 0
+        
+        # Rango actual
+        p_min_dyn = p_min_st
+        p_max_dyn = p_max_st
+        
+        for dia in range(1, filas):
+            p_hoy = serie_precios[dia]
+            
+            if p_min_dyn <= p_hoy <= p_max_dyn:
+                fees_dyn += cap_dyn * fee_diario
+            else:
+                # Rebalanceo
+                gas_total += gas
+                
+                # IL Realizado
+                if p_hoy < p_min_dyn:
+                    cap_dyn = cap_dyn * (p_hoy / p_min_dyn)
+                # Si sale por arriba (p_hoy > p_max_dyn), cap_dyn se mantiene (vendimos todo a stable)
+                
+                # Nuevo Rango (Simulado)
+                # Centramos en p_hoy con el mismo ancho porcentual relativo
+                width_pct = (p_max_dyn - p_min_dyn) / 2 / ((p_max_dyn + p_min_dyn)/2)
+                # O recalculamos basado en std teórica
+                std_aprox_dyn = p_hoy * (volatilidad_anual * np.sqrt(window/365))
+                p_min_dyn = p_hoy - (std_dev * std_aprox_dyn)
+                p_max_dyn = p_hoy + (std_dev * std_aprox_dyn)
+                
+        resultados_dinamica.append(cap_dyn + fees_dyn - gas_total)
+
+    progress_bar.empty()
+    return precios_matrix, np.array(resultados_estatica), np.array(resultados_dinamica)
 
 # --- UI PRINCIPAL ---
 
-# 1. Generar Datos
-df_market = generar_datos_mercado(precio_actual, volatilidad_anual, tendencia_anual, dias_analisis)
+# 1. Generar y Calcular (Solo si se pulsa o cambia input)
+matriz_precios = generar_montecarlo_precios(precio_actual, volatilidad_anual, tendencia_anual, dias_analisis, n_simulaciones)
+matriz_precios, res_st, res_dyn = ejecutar_analisis_montecarlo(matriz_precios, capital_inicial, apr_estimado, gas_rebalanceo, bb_window, bb_std)
 
-# 2. Ejecutar Simulación
-res = simular_comparativa(df_market, capital_inicial, apr_estimado, gas_rebalanceo, bb_window, bb_std)
+# --- RESULTADOS AGREGADOS ---
 
-if res:
-    # --- PANEL SUPERIOR: KPIs ---
-    col1, col2, col3 = st.columns(3)
-    
-    est_neto = res['estatica']['total'] - capital_inicial
-    dyn_neto = res['dinamica']['total'] - capital_inicial
-    
-    col1.metric("Resultado Estático", f"${res['estatica']['total']:.2f}", f"{est_neto:.2f} $")
-    col2.metric("Resultado Dinámico", f"${res['dinamica']['total']:.2f}", f"{dyn_neto:.2f} $")
-    
-    diff = res['dinamica']['total'] - res['estatica']['total']
-    winner = "Dinámica" if diff > 0 else "Estática"
-    color = "normal" if diff > 0 else "off"
-    col3.metric("Diferencia (Dyn - Stat)", f"${diff:.2f}", f"Ganador: {winner}")
+# Estadísticas Clave
+mean_st = np.mean(res_st)
+mean_dyn = np.mean(res_dyn)
+median_st = np.median(res_st)
+median_dyn = np.median(res_dyn)
 
-    # --- GRÁFICO ---
-    st.subheader("Análisis Visual de Rangos")
-    
-    # Calcular bandas para visualización
-    df_viz = calcular_bollinger(df_market, bb_window, bb_std)
-    
-    fig = go.Figure()
-    
-    # Precio
-    fig.add_trace(go.Scatter(x=df_viz.index, y=df_viz['close'], mode='lines', name='Precio', line=dict(color='white')))
-    
-    # Bandas Bollinger (Dinámicas)
-    fig.add_trace(go.Scatter(x=df_viz.index, y=df_viz['upper'], mode='lines', name='Banda Sup', line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=df_viz.index, y=df_viz['lower'], mode='lines', name='Banda Inf', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 255, 0.1)', showlegend=False))
-    
-    # Rango Estático (Fijo)
-    r_min, r_max = res['estatica']['rango']
-    fig.add_hline(y=r_max, line_dash="dash", line_color="red", annotation_text="Límite Sup. Estático")
-    fig.add_hline(y=r_min, line_dash="dash", line_color="green", annotation_text="Límite Inf. Estático")
+# ¿Quién gana más veces?
+wins_dyn = np.sum(res_dyn > res_st)
+win_rate = (wins_dyn / n_simulaciones) * 100
 
-    fig.update_layout(template="plotly_dark", height=500, title="Evolución de Precio vs Rangos")
-    st.plotly_chart(fig, use_container_width=True)
+st.subheader("📊 Resultados del Análisis Montecarlo")
 
-    # --- DETALLE ---
-    st.subheader("Desglose de Rendimiento")
-    c1, c2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Retorno PROMEDIO Estático", f"${mean_st:,.0f}", delta=f"{mean_st - capital_inicial:.0f} $ Netos")
+    st.caption(f"Mediana: ${median_st:,.0f}")
+
+with col2:
+    st.metric("Retorno PROMEDIO Dinámico", f"${mean_dyn:,.0f}", delta=f"{mean_dyn - capital_inicial:.0f} $ Netos")
+    st.caption(f"Mediana: ${median_dyn:,.0f}")
+
+with col3:
+    diff_promedio = mean_dyn - mean_st
+    st.metric("Diferencia (Promedio)", f"${diff_promedio:,.0f}", delta_color="normal")
+    if win_rate > 50:
+        st.success(f"🏆 La Dinámica gana en el **{win_rate:.1f}%** de los escenarios.")
+    else:
+        st.error(f"🐢 La Estática gana en el **{100 - win_rate:.1f}%** de los escenarios.")
+
+# --- GRÁFICO DE CONO DE PROBABILIDAD ---
+st.subheader(f"Proyección de Precios ({n_simulaciones} Escenarios)")
+
+# Calculamos percentiles para el gráfico (El Cono)
+p10 = np.percentile(matriz_precios, 10, axis=1)
+p50 = np.percentile(matriz_precios, 50, axis=1) # Mediana
+p90 = np.percentile(matriz_precios, 90, axis=1)
+x_axis = np.arange(len(p50))
+
+fig = go.Figure()
+
+# Área sombreada (Rango 10% - 90% de probabilidad)
+fig.add_trace(go.Scatter(
+    x=np.concatenate([x_axis, x_axis[::-1]]),
+    y=np.concatenate([p90, p10[::-1]]),
+    fill='toself',
+    fillcolor='rgba(0, 200, 200, 0.2)',
+    line=dict(color='rgba(255,255,255,0)'),
+    name='Rango Probable (80% casos)'
+))
+
+# Línea Mediana
+fig.add_trace(go.Scatter(
+    x=x_axis, y=p50,
+    mode='lines', line=dict(color='white', width=2),
+    name='Precio Mediano'
+))
+
+# Línea del Rango Estático (Solo referencia visual inicial)
+# Usamos el precio inicial para pintar el rango teórico inicial
+std_aprox_viz = precio_actual * (volatilidad_anual * np.sqrt(bb_window/365))
+r_min_viz = precio_actual - (bb_std * std_aprox_viz)
+r_max_viz = precio_actual + (bb_std * std_aprox_viz)
+
+fig.add_hline(y=r_max_viz, line_dash="dash", line_color="red", annotation_text="Límite Sup. Estático (Ref)")
+fig.add_hline(y=r_min_viz, line_dash="dash", line_color="green", annotation_text="Límite Inf. Estático (Ref)")
+
+fig.update_layout(
+    template="plotly_dark", 
+    height=500, 
+    title="Cono de Probabilidad de Precio (Montecarlo)",
+    xaxis_title="Días",
+    yaxis_title="Precio ($)"
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# --- EXPLICACIÓN DIDÁCTICA ---
+with st.expander("ℹ️ ¿Cómo interpretar estos datos?"):
+    st.write("""
+    **Análisis de Montecarlo:** En lugar de predecir el futuro una vez, hemos simulado el mercado **{} veces** con diferentes caminos aleatorios basados en la volatilidad.
     
-    with c1:
-        st.info("🐢 Estrategia Estática (Hold Range)")
-        st.write(f"**Días en Rango:** {res['estatica']['dias_in']} de {dias_analisis}")
-        st.write(f"**Fees Generados:** ${res['estatica']['fees']:.2f}")
-        st.write(f"**Rango Usado:** ${r_min:.2f} - ${r_max:.2f}")
-        
-    with c2:
-        st.warning("🐇 Estrategia Dinámica (Auto-Rebalance)")
-        st.write(f"**Veces Rebalanceado:** {res['dinamica']['rebalanceos']}")
-        st.write(f"**Gas Gastado:** ${res['dinamica']['gas']:.2f}")
-        st.write(f"**Fees Generados:** ${res['dinamica']['fees']:.2f}")
-        if diff < 0:
-            st.error(f"⚠️ El rebalanceo destruyó ${abs(diff):.2f} de valor vs quedarse quieto.")
-        else:
-            st.success(f"✅ El rebalanceo generó ${diff:.2f} extra.")
+    * **Retorno Promedio:** Es la media matemática de todos los escenarios.
+    * **Probabilidad de Victoria:** Porcentaje de veces que una estrategia superó a la otra.
+    * **Gráfico:** La línea blanca es el camino "central". La zona azulada indica dónde estará el precio el 80% de las veces. Si tus rangos estáticos (líneas punteadas) están muy lejos de la zona azul, es probable que te salgas de rango.
+    """.format(n_simulaciones))
