@@ -22,7 +22,7 @@ with st.sidebar:
     
     # 2. Parámetros de la Estrategia
     st.subheader("Estrategia")
-    dias_analisis = st.slider("Días a simular", 7, 365, 30)
+    dias_analisis = st.slider("Días a simular", 7, 365, 30, step=1)
     apr_estimado = st.number_input("APR Pool Estimado (%)", value=40.0) / 100
     gas_rebalanceo = st.number_input("Coste Gas por Rebalanceo ($)", value=15.0)
     capital_inicial = st.number_input("Capital a Invertir ($)", value=10000.0)
