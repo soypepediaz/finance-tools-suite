@@ -224,6 +224,8 @@ st.info("Esta tabla muestra la secuencia de rebalanceos en la primera simulació
 
 if len(log_ops) > 0:
     df_ops = pd.DataFrame(log_ops)
+    
+    # Mostramos la tabla formateada
     st.dataframe(df_ops.style.format({
         "Fees Generados": "+${:,.2f}",
         "Valor Salida Pool": "${:,.2f}",
@@ -233,24 +235,40 @@ if len(log_ops) > 0:
         "Precio Ruptura": "${:,.2f}"
     }), use_container_width=True)
     
-    # Análisis Final del Log con Contexto
-    total_fees = df_ops["Fees Generados"].sum()
-    total_costes = df_ops["Costes (Swap+Gas)"].sum()
-    ratio_rentabilidad = total_fees / total_costes if total_costes > 0 else 0
+    # --- CÁLCULO DEL P&L OPERATIVO (INGRESOS vs GASTOS) ---
+    total_ingresos = df_ops["Fees Generados"].sum()
     
-    if ratio_rentabilidad > 1.2:
-        mensaje_analisis = f"✅ **Estrategia Saludable:** Por cada $1 gastado en rebalanceos, has generado ${ratio_rentabilidad:.2f} en fees. La volatilidad ha permitido capturar valor."
-    elif 0.8 <= ratio_rentabilidad <= 1.2:
-        mensaje_analisis = f"⚠️ **Estrategia al Límite:** Estás cambiando el dinero de mano. Generas tantos fees como costes tienes (${ratio_rentabilidad:.2f} de retorno por dólar gastado)."
+    # Gastos = Costes de Fricción (Swap+Gas) + Costes de Oportunidad Realizados (IL)
+    total_friccion = df_ops["Costes (Swap+Gas)"].sum()
+    total_il = df_ops["Pérdida IL (Info)"].sum()
+    total_gastos = total_friccion + total_il
+    
+    # Resultado Neto
+    neto_operativo = total_ingresos - total_gastos
+    roi_gastos = (total_ingresos / total_gastos) * 100 if total_gastos > 0 else 0
+    
+    # Lógica del Diagnóstico
+    if neto_operativo > 0:
+        estado = "✅ **NEGOCIO RENTABLE**"
+        mensaje = f"Tus ingresos (Fees) cubren todos los costes operativos (incluyendo el IL). Por cada $100 que gastas en rebalancear y asumir pérdidas, el mercado te devuelve **${roi_gastos:.0f}**."
     else:
-        mensaje_analisis = f"❌ **Churning (Sobreenfoque):** Estás rebalanceando demasiado. Por cada $1 gastado en costes, solo recuperas ${ratio_rentabilidad:.2f} en fees. Considera ampliar el rango."
+        estado = "❌ **NEGOCIO EN PÉRDIDAS**"
+        mensaje = f"Los fees no son suficientes para compensar el coste de rebalancear (vender barato/comprar caro). Estás perdiendo dinero operativamente. Sería mejor una estrategia estática (menos costes)."
 
-    st.markdown(f"""
-    **Resumen Operativo:**
-    * Fees Generados: **${total_fees:,.2f}**
-    * Costes Rebalanceo: **-${total_costes:,.2f}**
+    # Visualización del Resumen Operativo
+    st.markdown("### 📊 Cuenta de Resultados Operativa")
+    col_res1, col_res2, col_res3 = st.columns(3)
     
-    {mensaje_analisis}
+    col_res1.metric("Ingresos Totales (Fees)", f"${total_ingresos:,.2f}")
+    col_res2.metric("Gastos Totales (IL + Swap + Gas)", f"-${total_gastos:,.2f}", help=f"Desglose: -${total_il:,.0f} (IL) y -${total_friccion:,.0f} (Comisiones)")
+    col_res3.metric("Beneficio Neto Operativo", f"${neto_operativo:,.2f}", delta="Beneficio" if neto_operativo > 0 else "Pérdida")
+    
+    st.markdown(f"""
+    ---
+    **Diagnóstico de la Estrategia:**
+    {estado}
+    * {mensaje}
     """)
+    
 else:
-    st.success("En esta simulación no hubo rebalanceos (Hold perfecto).")
+    st.success("En esta simulación no hubo rebalanceos (Hold perfecto). El Beneficio Neto es igual a los Fees totales generados.")
