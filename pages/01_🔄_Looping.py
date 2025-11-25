@@ -650,10 +650,10 @@ with tab_backtest:
 with tab_dynamic_bt:
     st.markdown("### 🔄 Backtest Dinámico: 'Accumulator Mode'")
     st.info("""
-    **Estrategia de Acumulación de Satoshi:**
-    1. **Inicio:** Compramos BTC con capital y deuda (Apalancamiento).
-    2. **Defensa:** Si cae, inyectamos USD para salvar la posición (aumentando la base de BTC).
-    3. **Moonbag (x2):** Si la posición dobla su valor, **retiramos los BTC iniciales a la billetera fría** y reiniciamos la estrategia solo con el beneficio sobrante.
+    **Objetivo: Acumular Bitcoin (u otro activo) gratis.**
+    1. **Entrada:** Compramos X cantidad de tokens (Capital + Deuda).
+    2. **Defensa:** Si cae, inyectamos USD para salvar la posición.
+    3. **Moonbag:** Cuando el valor neto permita recuperar la inversión, **retiramos los tokens iniciales** y reinvertimos solo las ganancias.
     """)
     
     col_dyn1, col_dyn2, col_dyn3 = st.columns(3)
@@ -661,34 +661,34 @@ with tab_dynamic_bt:
         dyn_ticker = st.text_input("Ticker", "BTC-USD", key="dy_t")
         dyn_capital = st.number_input("Capital Inicial ($)", 10000.0, key="dy_c")
     with col_dyn2:
-        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*2), key="dy_d")
+        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*4), key="dy_d") # 4 años por defecto
         dyn_lev = st.slider("Apalancamiento Objetivo", 1.1, 4.0, 2.0, key="dy_l")
     with col_dyn3:
         dyn_th = st.number_input("Umbral Defensa (%)", 15.0, key="dy_th") / 100.0
         run_dyn = st.button("🚀 Simular Acumulación", type="primary")
 
     if run_dyn:
-        with st.spinner("Simulando estrategia de acumulación de activos..."):
+        with st.spinner("Simulando estrategia de acumulación..."):
             try:
                 df = yf.download(dyn_ticker, start=dyn_start, progress=False)
                 if df.empty: st.error("Sin datos"); st.stop()
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
                 # --- ESTADO INICIAL ---
-                wallet_usd = dyn_capital    # Dinero fiat disponible para abrir posiciones
-                btc_hodl_bag = 0.0          # BTCs retirados a la billetera fría (Seguros)
+                wallet_usd = dyn_capital    # Dinero disponible para abrir
+                btc_hodl_bag = 0.0          # Cantidad de Tokens acumulados (Risk Free)
                 
                 # Métricas de rendimiento
-                total_usd_injected = 0.0    # Dinero extra metido desde el bolsillo
+                total_usd_injected = 0.0    
                 
                 position = None 
-                # Estructura de position:
+                # Estructura corregida:
                 # {
-                #   "total_amt": Cantidad total de BTC en el protocolo (Mios + Prestados)
-                #   "own_amt":   Cantidad de BTC que son "míos" (Mi inversión inicial en este ciclo)
-                #   "debt":      Deuda en USD
-                #   "liq":       Precio liquidación
-                #   "risk_base": Valor en USD de lo que arriesgo en este ciclo (para calcular el x2)
+                #   "total_amt": Total tokens en Aave
+                #   "debt_usd":  Deuda en USD
+                #   "liq":       Precio Liq
+                #   "initial_stack": La cantidad de BTC que pusimos al abrir (Nuestro objetivo a recuperar)
+                #   "defended":  Flag
                 # }
 
                 hist = []
@@ -698,157 +698,145 @@ with tab_dynamic_bt:
                     if pd.isna(r['Close']): continue
                     op, lo, hi, cl = float(r['Open']), float(r['Low']), float(r['High']), float(r['Close'])
                     
-                    # 1. ABRIR POSICIÓN (Si tenemos cash y no hay posición)
+                    # 1. ABRIR POSICIÓN
                     if position is None and wallet_usd > 0:
                         col_usd = wallet_usd * dyn_lev
                         debt = col_usd - wallet_usd
                         
-                        total_amt = col_usd / op      # Total BTC comprados
-                        own_amt = wallet_usd / op     # Mis BTC (los que quiero recuperar luego)
+                        total_amt = col_usd / op
+                        my_initial_tokens = wallet_usd / op # Estos son los que quiero recuperar
                         
                         liq = debt / (total_amt * 0.80) # LTV 80%
                         
-                        # Guardamos la "Base de Riesgo" de este ciclo para saber cuándo doblamos
-                        cycle_risk_usd = wallet_usd 
-                        
                         position = {
                             "total_amt": total_amt,
-                            "own_amt": own_amt,
-                            "debt": debt,
+                            "debt_usd": debt,
                             "liq": liq,
-                            "risk_base": cycle_risk_usd,
+                            "initial_stack": my_initial_tokens, # <--- NOMBRE CORREGIDO
                             "defended": False
                         }
                         
-                        wallet_usd = 0 # Dinero desplegado
+                        wallet_usd = 0
                         events.append({
                             "Fecha": d.date(), "Evento": "🟢 APERTURA", 
                             "Precio": f"${op:,.0f}", 
-                            "Detalle": f"Comprados: {total_amt:.4f} BTC", 
-                            "Info Extra": f"(Míos: {own_amt:.4f} BTC)"
+                            "Detalle": f"Stack Inicial: {my_initial_tokens:.4f} tokens", 
+                            "Info Extra": f"Deuda: ${debt:,.0f}"
                         })
 
-                    # 2. GESTIÓN DE POSICIÓN
+                    # 2. GESTIÓN
                     if position:
-                        # A. LIQUIDACIÓN (Game Over del ciclo)
+                        # A. LIQUIDACIÓN
                         if lo <= position["liq"]:
-                            position = None 
-                            wallet_usd = 0 
-                            # Nota: btc_hodl_bag NO se pierde, ya está fuera.
-                            events.append({
-                                "Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", 
-                                "Precio": f"${lo:,.0f}", 
-                                "Detalle": "Pérdida total de la posición activa", 
-                                "Info Extra": "-"
-                            })
+                            position = None; wallet_usd = 0
+                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida total de la posición", "Info Extra": "-"})
                         
                         else:
                             # B. MOONBAG (Recuperar mis BTC)
-                            # Valor Neto Actual = (Total BTC * Precio) - Deuda
-                            curr_equity_usd = (position["total_amt"] * cl) - position["debt"]
+                            # Valor Neto (Equity) = (Tokens * Precio) - Deuda
+                            curr_equity_usd = (position["total_amt"] * cl) - position["debt_usd"]
                             
-                            # Condición: Haber doblado la inversión de este ciclo (x2)
-                            # OJO: Si estamos jugando con "dinero de la casa" (risk_base=0), esto saltaría siempre.
-                            # Así que solo hacemos Moonbag si hay riesgo vivo (risk_base > 0).
-                            if position["risk_base"] > 0 and curr_equity_usd >= (position["risk_basis"] * 2):
+                            # Valor de mi Stack inicial hoy
+                            value_of_initial_stack = position["initial_stack"] * cl
+                            
+                            # Condición de éxito: 
+                            # Si el Equity actual es suficiente para sacar mis tokens Y sobra algo decente para seguir
+                            # (Por ejemplo, si equity >= 2 * valor_inicial, o simplemente si hay beneficio sustancial)
+                            # Usaremos el x2 clásico sobre el valor USD invertido en este ciclo para asegurar viabilidad
+                            
+                            invested_usd_this_cycle = position["initial_stack"] * position["liq"] * 0.80 * dyn_lev # Aprox value at entry
+                            # Simplificación robusta: Si Equity > 2 * Valor de lo que quiero sacar
+                            
+                            if curr_equity_usd >= (value_of_initial_stack * 2):
                                 
-                                # 1. Identificamos cuántos BTC son "míos" para retirar
-                                btc_to_withdraw = position["own_amt"]
+                                # 1. Retirar mis tokens a la saca
+                                tokens_out = position["initial_stack"]
+                                btc_hodl_bag += tokens_out
                                 
-                                # 2. Calculamos si es posible retirarlos financieramente
-                                # Valor a sacar = btc_to_withdraw * Precio
-                                value_to_withdraw = btc_to_withdraw * cl
+                                # 2. Calcular qué nos queda (Beneficios)
+                                remaining_equity_usd = curr_equity_usd - value_of_initial_stack
                                 
-                                # El equity restante serán las ganancias
-                                remaining_equity = curr_equity_usd - value_to_withdraw
+                                # 3. Reinvertir Beneficios (Compound)
+                                # Cerramos la posición vieja lógicamente y abrimos una nueva con el remanente
+                                wallet_usd = remaining_equity_usd
+                                position = None # Forzamos reapertura en el siguiente ciclo con el nuevo capital
                                 
-                                if remaining_equity > 0:
-                                    # EJECUTAR MOONBAG
-                                    btc_hodl_bag += btc_to_withdraw # A la saca
-                                    
-                                    # Cerramos la posición vieja y preparamos el cash para abrir una nueva mañana
-                                    # con el beneficio generado (Interés Compuesto)
-                                    wallet_usd = remaining_equity
-                                    
-                                    events.append({
-                                        "Fecha": d.date(), "Evento": "🚀 MOONBAG", 
-                                        "Precio": f"${cl:,.0f}", 
-                                        "Detalle": f"Retirados {btc_to_withdraw:.4f} BTC a HODL", 
-                                        "Info Extra": f"Reinvierte: ${wallet_usd:,.0f}"
-                                    })
-                                    
-                                    position = None # Forzamos reinicio en el siguiente tick
+                                events.append({
+                                    "Fecha": d.date(), "Evento": "🚀 MOONBAG", 
+                                    "Precio": f"${cl:,.0f}", 
+                                    "Detalle": f"Retirados {tokens_out:.4f} tokens", 
+                                    "Info Extra": f"Reinvierte: ${wallet_usd:,.0f}"
+                                })
 
-                            # C. DEFENSA (Inyección de USD para comprar más BTC baratos)
+                            # C. DEFENSA
                             elif position and lo <= (position["liq"] * (1 + dyn_th)):
                                 trig = position["liq"] * (1 + dyn_th)
                                 dp = min(op, trig)
                                 
-                                # Nuevo objetivo: alejar liq 20%
+                                # Objetivo: Alejar liquidación 20%
                                 target_liq = dp * 0.80
-                                # Formula: Deuda / (Total_BTC * 0.80) = Target_Liq
-                                # Total_BTC_Need = Deuda / (Target_Liq * 0.80)
-                                needed_total = position["debt"] / (target_liq * 0.80)
-                                add_btc = needed_total - position["total_amt"]
+                                # Deuda / (Tokens * 0.80) = Target  -> Tokens = Deuda / (Target * 0.80)
+                                needed_total = position["debt_usd"] / (target_liq * 0.80)
+                                add_tokens = needed_total - position["total_amt"]
                                 
-                                if add_btc > 0:
-                                    cost_usd = add_btc * dp
-                                    total_usd_injected += cost_usd # Sale de nuestro bolsillo
+                                if add_tokens > 0:
+                                    cost_usd = add_tokens * dp
+                                    total_usd_injected += cost_usd
                                     
                                     # Actualizamos posición
-                                    position["total_amt"] += add_btc
-                                    position["user_tokens"] += add_btc # Estos nuevos BTC también son "míos" (pagados)
-                                    position["risk_base"] += cost_usd # Aumenta mi riesgo en la mesa
+                                    position["total_amt"] += add_tokens
+                                    # Al inyectar, aumentamos nuestro "Stack" personal en la posición
+                                    position["initial_stack"] += add_tokens 
                                     position["liq"] = target_liq
                                     position["defended"] = True
                                     
                                     events.append({
                                         "Fecha": d.date(), "Evento": "🛡️ DEFENSA", 
                                         "Precio": f"${dp:,.0f}", 
-                                        "Detalle": f"Comprados {add_btc:.4f} BTC", 
-                                        "Info Extra": f"Costo: ${cost_usd:,.0f}"
+                                        "Detalle": f"Inyectados ${cost_usd:,.0f}", 
+                                        "Info Extra": f"+{add_tokens:.4f} tokens"
                                     })
 
                     # --- REGISTRO DIARIO ---
-                    # Valor Total = (BTC en HODL * Precio) + (Equity en Estrategia) + (Cash esperando)
+                    # Valor Total = (Tokens HODL * Precio) + (Equity Estrategia) + (Cash)
                     val_hodl_bag = btc_hodl_bag * cl
                     val_strategy = 0
                     if position:
-                        val_strategy = (position["total_amt"] * cl) - position["debt"]
+                        val_strategy = (position["total_amt"] * cl) - position["debt_usd"]
                     
                     total_wealth = val_hodl_bag + val_strategy + wallet_usd
                     
-                    # Inversión Total Real = Capital Inicial + Inyecciones Externas
-                    total_invested_pocket = dyn_capital + total_usd_injected
+                    # Comparativa HODL Estático (Capital Inicial comprado en T0 y never sold)
+                    initial_price = df.iloc[0]['Close']
+                    static_hodl_tokens = dyn_capital / initial_price
+                    val_static_hodl = static_hodl_tokens * cl
                     
-                    # Comparativa HODL Estático (Si hubiera comprado el día 1 y no hubiera hecho nada)
-                    static_btc_amount = dyn_capital / df.iloc[0]['Close']
-                    val_static_hodl = static_btc_amount * cl
+                    # Inversión de Bolsillo (Inicial + Defensas)
+                    total_invested = dyn_capital + total_usd_injected
                     
                     hist.append({
                         "Fecha": d,
                         "Riqueza Total ($)": total_wealth,
                         "HODL Pasivo ($)": val_static_hodl,
-                        "BTC Acumulados": btc_hodl_bag,
-                        "Inversión Bolsillo": total_invested_pocket
+                        "Tokens Acumulados": btc_hodl_bag,
+                        "Inversión Total ($)": total_invested
                     })
 
                 # --- INFORME FINAL ---
                 df_r = pd.DataFrame(hist).set_index("Fecha")
                 final_wealth = df_r.iloc[-1]["Riqueza Total ($)"]
-                final_inv = df_r.iloc[-1]["Inversión Bolsillo"]
-                final_hodl_val = df_r.iloc[-1]["HODL Pasivo ($)"]
+                final_invested = df_r.iloc[-1]["Inversión Total ($)"]
                 
-                roi = ((final_wealth - final_inv) / final_inv) * 100
+                roi = ((final_wealth - final_invested) / final_invested) * 100
                 
                 st.divider()
                 st.subheader(f"📊 Informe de Acumulación: {dyn_ticker}")
                 
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Patrimonio Final", f"${final_wealth:,.0f}", delta=f"{roi:.2f}% ROI")
-                m2.metric("BTCs en Caja Fuerte", f"{btc_hodl_bag:.4f} BTC", help="Estos BTC ya no tienen riesgo de liquidación")
-                m3.metric("Vs HODL Pasivo", f"${final_hodl_val:,.0f}", delta=f"${final_wealth - final_hodl_val:,.0f} Diff")
-                m4.metric("Inversión Total", f"${final_inv:,.0f}", help="Capital Inicial + Defensas")
+                m2.metric("Tokens 'Risk Free'", f"{btc_hodl_bag:.4f}", help="Tokens retirados y seguros")
+                m3.metric("Dinero Extra Inyectado", f"${total_usd_injected:,.0f}")
+                m4.metric("Total Operaciones", len(events))
                 
                 # Gráfica
                 fig = go.Figure()
