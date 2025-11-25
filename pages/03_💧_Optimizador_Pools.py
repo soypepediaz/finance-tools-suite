@@ -2,45 +2,41 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import yfinance as yf
 
 # --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Liquidity Pro Calc", layout="wide")
-st.title("⚖️ Optimizador: Auditoría por Operaciones")
+st.title("🧪 Laboratorio de Liquidez: Simulación & Backtest")
 st.markdown("---")
 
-# --- 2. SIDEBAR ---
+# --- 2. SIDEBAR (COMPARTIDO) ---
 with st.sidebar:
-    st.header("1. Mercado y Simulación")
-    precio_actual = st.number_input("Precio Inicial ($)", value=65000.0)
-    volatilidad_anual = st.slider("Volatilidad Anual (%)", 10, 200, 60) / 100
-    tendencia_anual = st.slider("Tendencia Anual (%)", -50, 150, 0) / 100
+    st.header("1. Configuración de Estrategia")
     
-    n_simulaciones = st.slider("Nº Simulaciones", 50, 1000, 200, step=50)
-    dias_analisis = st.slider("Días a simular", 7, 365, 30, step=1)
+    # Inputs que aplican a AMBOS modos
+    capital_inicial = st.number_input("Capital Inicial ($)", value=10000.0)
     
-    st.markdown("---")
-    st.header("2. Estrategia ESTÁTICA")
+    st.subheader("Estrategia ESTÁTICA")
     col_bb1, col_bb2 = st.columns(2)
     with col_bb1:
-        bb_window = st.number_input("Ventana (Días)", value=7, min_value=1, max_value=90)
+        bb_window = st.number_input("Ventana (Días)", value=30, min_value=1, max_value=90, help="Días para cálculo de volatilidad.")
     with col_bb2:
         std_estatica = st.number_input("Ancho (SD)", value=2.0, step=0.1, min_value=0.5, max_value=5.0)
     apr_base_estatica = st.number_input("APR Base Estática (%)", value=15.0) / 100
     
-    st.markdown("---")
-    st.header("3. Estrategia DINÁMICA")
+    st.subheader("Estrategia DINÁMICA")
     pct_ancho_dinamico = st.slider("% del Ancho Estático", 5, 100, 25, step=5)
     
-    st.markdown("**Costes Operativos**")
+    st.subheader("Costes Operativos")
     gas_rebalanceo = st.number_input("Gas por Rebalanceo ($)", value=5.0)
     swap_fee = st.number_input("Swap Fee del Pool (%)", value=0.30, step=0.01, format="%.2f") / 100
     
-    capital_inicial = st.number_input("Capital ($)", value=10000.0)
-    
+    # Info Eficiencia
     factor_concentracion = 1 / (pct_ancho_dinamico / 100)
-    st.info(f"⚡ **APR Dinámico:** {(apr_base_estatica * factor_concentracion)*100:.1f}% ({factor_concentracion:.1f}x)")
+    st.markdown("---")
+    st.info(f"⚡ **Multiplicador APR:** {factor_concentracion:.1f}x ({(apr_base_estatica * factor_concentracion)*100:.1f}%)")
 
-# --- 3. FUNCIONES MATEMÁTICAS ---
+# --- 3. FUNCIONES DEL NÚCLEO (TU CÓDIGO VALIDADO) ---
 
 def generar_montecarlo_precios(precio, vol, tendencia, dias, n_sims):
     dt = 1/365
@@ -78,10 +74,13 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
     stats_rebalanceos = []
     log_operaciones = [] 
     
-    progress_bar = st.progress(0)
+    # Barra de progreso solo si hay muchas simulaciones (Montecarlo)
+    show_progress = columnas > 1
+    if show_progress:
+        progress_bar = st.progress(0)
 
     for sim_idx in range(columnas):
-        if sim_idx % (columnas // 10 + 1) == 0:
+        if show_progress and sim_idx % (columnas // 10 + 1) == 0:
             progress_bar.progress(sim_idx / columnas)
             
         serie_precios = precios_matrix[:, sim_idx]
@@ -128,10 +127,10 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                 # A. Determinar Evento y Precio de Ruptura (Límite del Rango)
                 if p_hoy > p_max_dyn:
                     evento = "Ruptura Rango Superior ⬆️"
-                    precio_ruptura = p_max_dyn # Precio límite visual
+                    precio_ruptura = p_max_dyn 
                 else:
                     evento = "Ruptura Rango Inferior ⬇️"
-                    precio_ruptura = p_min_dyn # Precio límite visual
+                    precio_ruptura = p_min_dyn 
                 
                 # B. Calcular Valor de Salida (Matemático)
                 p_ref_anterior = (p_max_dyn + p_min_dyn) / 2
@@ -148,19 +147,19 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                 # E. Nuevo Capital
                 cap_nuevo = val_salida_pool + fees_acumulados_operacion - costes_totales
                 
-                # F. Log (Solo Simulación 1)
+                # F. Log (Solo Simulación 0)
                 if sim_idx == 0:
                     log_operaciones.append({
                         "Operación": num_rebalanceos,
+                        "Día Índice": dia, # Usaremos esto para el backtest
                         "Rango Teórico": f"{p_min_dyn:.0f} - {p_max_dyn:.0f}",
-                        "Día In/Out": f"Día {op_start_day} ➝ {dia}",
                         "Fees Generados": fees_acumulados_operacion,
                         "Valor Salida Pool": val_salida_pool,
                         "Pérdida IL (Info)": il_realizado,
                         "Costes (Swap+Gas)": costes_totales,
                         "Capital Final": cap_nuevo,
                         "Evento": evento,
-                        "Precio Ruptura": precio_ruptura # Usamos el límite del rango
+                        "Precio Ruptura": precio_ruptura 
                     })
                 
                 # G. Reset para Siguiente Operación
@@ -168,7 +167,7 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                 op_start_day = dia
                 fees_acumulados_operacion = 0
                 
-                # Nuevo Rango centrado en p_hoy (El rebalanceo se hace al precio real de mercado)
+                # Nuevo Rango centrado en p_hoy
                 nuevo_delta = p_hoy * ratio_width
                 p_min_dyn = p_hoy - nuevo_delta
                 p_max_dyn = p_hoy + nuevo_delta
@@ -176,99 +175,205 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
         res_dyn_final.append(cap_dyn + fees_acumulados_operacion)
         stats_rebalanceos.append(num_rebalanceos)
 
-    progress_bar.empty()
+    if show_progress:
+        progress_bar.empty()
     return (np.array(res_st_final), np.array(res_dyn_final), 
             np.mean(stats_rebalanceos), delta_st, log_operaciones)
 
-# --- 4. EJECUCIÓN ---
-matriz = generar_montecarlo_precios(precio_actual, volatilidad_anual, tendencia_anual, dias_analisis, n_simulaciones)
+# --- 4. INTERFAZ DE PESTAÑAS ---
 
-res_st, res_dyn, avg_reb, delta_viz, log_ops = ejecutar_analisis_operaciones(
-    matriz, capital_inicial, apr_base_estatica, std_estatica, pct_ancho_dinamico, 
-    gas_rebalanceo, swap_fee, volatilidad_anual, bb_window
-)
+tab1, tab2 = st.tabs(["🎲 Simulación Montecarlo", "📉 Backtesting Histórico"])
 
-# --- 5. VISUALIZACIÓN ---
-st.subheader("🏁 Comparativa de Rendimiento (Promedio)")
-m_st, m_dyn = np.mean(res_st), np.mean(res_dyn)
-c1, c2, c3 = st.columns(3)
-c1.metric("Estática", f"${m_st:,.0f}", f"{m_st-capital_inicial:+.0f} $ Netos")
-c2.metric("Dinámica", f"${m_dyn:,.0f}", f"{m_dyn-capital_inicial:+.0f} $ Netos")
-winner = "Dinámica" if m_dyn > m_st else "Estática"
-c3.metric("Ganador", winner, f"Diferencia: ${m_dyn-m_st:,.0f}")
+# ==========================================
+# PESTAÑA 1: MONTECARLO (CÓDIGO ORIGINAL)
+# ==========================================
+with tab1:
+    col_inp1, col_inp2, col_inp3 = st.columns(3)
+    with col_inp1:
+        precio_actual = st.number_input("Precio Inicial ($)", value=65000.0)
+    with col_inp2:
+        volatilidad_anual = st.slider("Volatilidad Anual (%)", 10, 200, 60) / 100
+    with col_inp3:
+        tendencia_anual = st.slider("Tendencia Anual (%)", -50, 150, 0) / 100
+        
+    n_simulaciones = st.slider("Nº Simulaciones", 50, 1000, 200, step=50)
+    dias_analisis = st.slider("Días a simular", 7, 365, 30, step=1)
+    
+    if st.button("🚀 Ejecutar Montecarlo", type="primary"):
+        # EJECUCIÓN (Usando el código que te gusta)
+        matriz = generar_montecarlo_precios(precio_actual, volatilidad_anual, tendencia_anual, dias_analisis, n_simulaciones)
+        
+        res_st, res_dyn, avg_reb, delta_viz, log_ops = ejecutar_analisis_operaciones(
+            matriz, capital_inicial, apr_base_estatica, std_estatica, pct_ancho_dinamico, 
+            gas_rebalanceo, swap_fee, volatilidad_anual, bb_window
+        )
+        
+        # VISUALIZACIÓN ORIGINAL
+        st.subheader("🏁 Comparativa de Rendimiento (Promedio)")
+        m_st, m_dyn = np.mean(res_st), np.mean(res_dyn)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Estática", f"${m_st:,.0f}", f"{m_st-capital_inicial:+.0f} $ Netos")
+        c2.metric("Dinámica", f"${m_dyn:,.0f}", f"{m_dyn-capital_inicial:+.0f} $ Netos")
+        winner = "Dinámica" if m_dyn > m_st else "Estática"
+        c3.metric("Ganador", winner, f"Diferencia: ${m_dyn-m_st:,.0f}")
 
-col_g1, col_g2 = st.columns(2)
-with col_g1:
-    st.caption("Proyección de Mercado")
-    p10, p50, p90 = np.percentile(matriz, 10, axis=1), np.percentile(matriz, 50, axis=1), np.percentile(matriz, 90, axis=1)
-    x = np.arange(len(p50))
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=np.concatenate([x, x[::-1]]), y=np.concatenate([p90, p10[::-1]]), fill='toself', fillcolor='rgba(0,150,255,0.15)', line=dict(color='rgba(255,255,255,0)'), name='80% Prob.'))
-    fig.add_trace(go.Scatter(x=x, y=p50, mode='lines', line=dict(color='white'), name='Mediana'))
-    fig.add_hline(y=precio_actual+delta_viz, line_dash="dash", line_color="#2ecc71")
-    fig.add_hline(y=precio_actual-delta_viz, line_dash="dash", line_color="#2ecc71")
-    fig.update_layout(template="plotly_dark", height=300, margin=dict(t=10,b=10))
-    st.plotly_chart(fig, use_container_width=True)
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            st.caption("Proyección de Mercado")
+            p10, p50, p90 = np.percentile(matriz, 10, axis=1), np.percentile(matriz, 50, axis=1), np.percentile(matriz, 90, axis=1)
+            x = np.arange(len(p50))
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=np.concatenate([x, x[::-1]]), y=np.concatenate([p90, p10[::-1]]), fill='toself', fillcolor='rgba(0,150,255,0.15)', line=dict(color='rgba(255,255,255,0)'), name='80% Prob.'))
+            fig.add_trace(go.Scatter(x=x, y=p50, mode='lines', line=dict(color='white'), name='Mediana'))
+            fig.add_hline(y=precio_actual+delta_viz, line_dash="dash", line_color="#2ecc71")
+            fig.add_hline(y=precio_actual-delta_viz, line_dash="dash", line_color="#2ecc71")
+            fig.update_layout(template="plotly_dark", height=300, margin=dict(t=10,b=10))
+            st.plotly_chart(fig, use_container_width=True)
 
-with col_g2:
-    st.caption("Distribución de Retornos")
-    fig2 = go.Figure()
-    fig2.add_trace(go.Histogram(x=res_st, name='Estática', marker_color='#2ecc71', opacity=0.7))
-    fig2.add_trace(go.Histogram(x=res_dyn, name='Dinámica', marker_color='#e74c3c', opacity=0.7))
-    fig2.update_layout(template="plotly_dark", height=300, margin=dict(t=10,b=10), barmode='overlay')
-    st.plotly_chart(fig2, use_container_width=True)
+        with col_g2:
+            st.caption("Distribución de Retornos")
+            fig2 = go.Figure()
+            fig2.add_trace(go.Histogram(x=res_st, name='Estática', marker_color='#2ecc71', opacity=0.7))
+            fig2.add_trace(go.Histogram(x=res_dyn, name='Dinámica', marker_color='#e74c3c', opacity=0.7))
+            fig2.update_layout(template="plotly_dark", height=300, margin=dict(t=10,b=10), barmode='overlay')
+            st.plotly_chart(fig2, use_container_width=True)
 
-# --- TABLA DE OPERACIONES ---
-st.subheader("📋 Registro de Operaciones (Simulación #1)")
-st.info("Esta tabla muestra la secuencia de rebalanceos en la primera simulación. 'Precio Ruptura' indica el límite del rango donde se realizó la salida.")
+        # TABLA OPERACIONES (TU FORMATO EXACTO)
+        st.subheader("📋 Registro de Operaciones (Simulación #1)")
+        if len(log_ops) > 0:
+            df_ops = pd.DataFrame(log_ops)
+            st.dataframe(df_ops.drop(columns=["Día Índice"]).style.format({ # Ocultamos índice interno
+                "Fees Generados": "+${:,.2f}",
+                "Valor Salida Pool": "${:,.2f}",
+                "Pérdida IL (Info)": "${:,.2f}",
+                "Costes (Swap+Gas)": "-${:,.2f}",
+                "Capital Final": "${:,.2f}",
+                "Precio Ruptura": "${:,.2f}"
+            }), use_container_width=True)
+            
+            total_fees = df_ops["Fees Generados"].sum()
+            total_friccion = df_ops["Costes (Swap+Gas)"].sum()
+            total_il = df_ops["Pérdida IL (Info)"].sum()
+            total_gastos = total_friccion + total_il
+            neto_operativo = total_fees - total_gastos
+            roi_gastos = (total_fees / total_gastos) * 100 if total_gastos > 0 else 0
+            
+            if neto_operativo > 0:
+                estado = "✅ **NEGOCIO RENTABLE**"
+                mensaje = f"Tus ingresos (Fees) cubren costes + IL. Retorno del gasto: {roi_gastos:.0f}%."
+            else:
+                estado = "❌ **NEGOCIO EN PÉRDIDAS**"
+                mensaje = f"Estás perdiendo dinero operativamente. Los fees no cubren el rebalanceo."
 
-if len(log_ops) > 0:
-    df_ops = pd.DataFrame(log_ops)
-    
-    # Mostramos la tabla formateada
-    st.dataframe(df_ops.style.format({
-        "Fees Generados": "+${:,.2f}",
-        "Valor Salida Pool": "${:,.2f}",
-        "Pérdida IL (Info)": "${:,.2f}",
-        "Costes (Swap+Gas)": "-${:,.2f}",
-        "Capital Final": "${:,.2f}",
-        "Precio Ruptura": "${:,.2f}"
-    }), use_container_width=True)
-    
-    # --- CÁLCULO DEL P&L OPERATIVO (INGRESOS vs GASTOS) ---
-    total_ingresos = df_ops["Fees Generados"].sum()
-    
-    # Gastos = Costes de Fricción (Swap+Gas) + Costes de Oportunidad Realizados (IL)
-    total_friccion = df_ops["Costes (Swap+Gas)"].sum()
-    total_il = df_ops["Pérdida IL (Info)"].sum()
-    total_gastos = total_friccion + total_il
-    
-    # Resultado Neto
-    neto_operativo = total_ingresos - total_gastos
-    roi_gastos = (total_ingresos / total_gastos) * 100 if total_gastos > 0 else 0
-    
-    # Lógica del Diagnóstico
-    if neto_operativo > 0:
-        estado = "✅ **NEGOCIO RENTABLE**"
-        mensaje = f"Tus ingresos (Fees) cubren todos los costes operativos (incluyendo el IL). Por cada $100 que gastas en rebalancear y asumir pérdidas, el mercado te devuelve **${roi_gastos:.0f}**."
-    else:
-        estado = "❌ **NEGOCIO EN PÉRDIDAS**"
-        mensaje = f"Los fees no son suficientes para compensar el coste de rebalancear (vender barato/comprar caro). Estás perdiendo dinero operativamente. Sería mejor una estrategia estática (menos costes)."
+            st.markdown("### 📊 Cuenta de Resultados Operativa")
+            c_r1, c_r2, c_r3 = st.columns(3)
+            c_r1.metric("Ingresos (Fees)", f"${total_fees:,.2f}")
+            c_r2.metric("Gastos (IL+Costes)", f"-${total_gastos:,.2f}")
+            c_r3.metric("Beneficio Neto", f"${neto_operativo:,.2f}", delta="Ganancia" if neto_operativo > 0 else "Pérdida")
+            st.markdown(f"**Diagnóstico:** {estado} - {mensaje}")
+        else:
+            st.success("Sin rebalanceos.")
 
-    # Visualización del Resumen Operativo
-    st.markdown("### 📊 Cuenta de Resultados Operativa")
-    col_res1, col_res2, col_res3 = st.columns(3)
+
+# ==========================================
+# PESTAÑA 2: BACKTESTING (NUEVA FUNCIONALIDAD)
+# ==========================================
+with tab2:
+    st.subheader("Validación con Datos Reales")
     
-    col_res1.metric("Ingresos Totales (Fees)", f"${total_ingresos:,.2f}")
-    col_res2.metric("Gastos Totales (IL + Swap + Gas)", f"-${total_gastos:,.2f}", help=f"Desglose: -${total_il:,.0f} (IL) y -${total_friccion:,.0f} (Comisiones)")
-    col_res3.metric("Beneficio Neto Operativo", f"${neto_operativo:,.2f}", delta="Beneficio" if neto_operativo > 0 else "Pérdida")
+    col_b1, col_b2, col_b3 = st.columns(3)
+    with col_b1:
+        ticker = st.text_input("Ticker (Yahoo Finance)", value="BTC-USD", help="Ej: BTC-USD, ETH-USD, SOL-USD")
+    with col_b2:
+        start_date = st.date_input("Fecha Inicio", value=pd.to_datetime("2024-01-01"))
+    with col_b3:
+        end_date = st.date_input("Fecha Fin", value=pd.to_datetime("today"))
     
-    st.markdown(f"""
-    ---
-    **Diagnóstico de la Estrategia:**
-    {estado}
-    * {mensaje}
-    """)
-    
-else:
-    st.success("En esta simulación no hubo rebalanceos (Hold perfecto). El Beneficio Neto es igual a los Fees totales generados.")
+    if st.button("📉 Ejecutar Backtest con Datos Reales"):
+        with st.spinner(f"Descargando datos históricos de {ticker}..."):
+            try:
+                # 1. Descarga y Preparación
+                data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                
+                if len(data) < 7:
+                    st.error("Error: Rango de fechas demasiado corto o sin datos.")
+                else:
+                    # Convertimos a matriz (N_dias, 1_simulacion) para usar TU MISMO motor
+                    precios_real = data['Close'].values.reshape(-1, 1)
+                    fechas_real = data.index
+                    
+                    # Para el backtest, usamos la volatilidad REAL de ese periodo para calcular el rango estático
+                    # Así vemos qué rango te habría sugerido la herramienta en ese momento
+                    log_rets = np.log(data['Close'] / data['Close'].shift(1))
+                    vol_real_periodo = log_rets.std() * np.sqrt(365)
+                    st.info(f"Volatilidad Real del Periodo: **{vol_real_periodo*100:.1f}%**")
+                    
+                    # 2. Ejecutar TU motor matemático (El mismo de la pestaña 1)
+                    res_st, res_dyn, avg_reb, delta_viz, log_ops = ejecutar_analisis_operaciones(
+                        precios_real, capital_inicial, apr_base_estatica, std_estatica, 
+                        pct_ancho_dinamico, gas_rebalanceo, swap_fee, vol_real_periodo, bb_window
+                    )
+                    
+                    # 3. Resultados
+                    val_st = res_st[0]
+                    val_dyn = res_dyn[0]
+                    
+                    k1, k2, k3 = st.columns(3)
+                    k1.metric("Resultado Estático", f"${val_st:,.0f}", f"{val_st-capital_inicial:+.0f} $")
+                    k2.metric("Resultado Dinámico", f"${val_dyn:,.0f}", f"{val_dyn-capital_inicial:+.0f} $")
+                    k3.metric("Diferencia", f"${val_dyn-val_st:,.0f}", delta_color="normal")
+                    
+                    # 4. Gráfico de Precio + Eventos
+                    st.subheader("Evolución de Precio y Eventos")
+                    fig_back = go.Figure()
+                    fig_back.add_trace(go.Scatter(x=fechas_real, y=data['Close'], mode='lines', name='Precio', line=dict(color='white', width=1)))
+                    
+                    # Pintamos los rebalanceos sobre el gráfico
+                    if len(log_ops) > 0:
+                        df_log = pd.DataFrame(log_ops)
+                        # Mapear índices a fechas reales
+                        fechas_eventos = [fechas_real[i] for i in df_log['Día Índice']]
+                        precios_eventos = [data['Close'].iloc[i] for i in df_log['Día Índice']]
+                        
+                        fig_back.add_trace(go.Scatter(
+                            x=fechas_eventos, y=precios_eventos, 
+                            mode='markers', marker=dict(color='yellow', size=8, symbol='x'),
+                            name='Rebalanceo'
+                        ))
+                    
+                    # Rangos Estáticos (Fijos al inicio)
+                    p_start = precios_real[0][0]
+                    rango_sup = p_start + (p_start * (vol_real_periodo * np.sqrt(bb_window/365) * std_estatica))
+                    rango_inf = p_start - (p_start * (vol_real_periodo * np.sqrt(bb_window/365) * std_estatica))
+                    fig_back.add_hline(y=rango_sup, line_dash="dash", line_color="#2ecc71")
+                    fig_back.add_hline(y=rango_inf, line_dash="dash", line_color="#2ecc71")
+                    fig_back.update_layout(template="plotly_dark", height=500, title=f"Historia {ticker}")
+                    st.plotly_chart(fig_back, use_container_width=True)
+                    
+                    # 5. Tabla de Auditoría (Con Fechas Reales)
+                    st.subheader("📋 Auditoría de Operaciones Reales")
+                    if len(log_ops) > 0:
+                        df_ops = pd.DataFrame(log_ops)
+                        df_ops["Fecha"] = [fechas_real[i].strftime('%Y-%m-%d') for i in df_ops['Día Índice']]
+                        
+                        # Mostramos tu tabla auditada
+                        st.dataframe(df_ops[["Operación", "Fecha", "Evento", "Fees Generados", "Costes (Swap+Gas)", "Pérdida IL (Info)", "Capital Final"]].style.format({
+                            "Fees Generados": "+${:,.2f}",
+                            "Costes (Swap+Gas)": "-${:,.2f}",
+                            "Pérdida IL (Info)": "${:,.2f}",
+                            "Capital Final": "${:,.2f}"
+                        }), use_container_width=True)
+                        
+                        # Resumen P&L
+                        total_fees = df_ops["Fees Generados"].sum()
+                        total_gastos = df_ops["Costes (Swap+Gas)"].sum() + df_ops["Pérdida IL (Info)"].sum()
+                        neto = total_fees - total_gastos
+                        
+                        st.markdown("### 📊 Resultado Operativo Real")
+                        c_r1, c_r2, c_r3 = st.columns(3)
+                        c_r1.metric("Ingresos Totales", f"${total_fees:,.2f}")
+                        c_r2.metric("Gastos (Fricción + IL)", f"-${total_gastos:,.2f}")
+                        c_r3.metric("Neto Real", f"${neto:,.2f}", delta="Ganancia" if neto > 0 else "Pérdida")
+
+            except Exception as e:
+                st.error(f"Error: {e}")
