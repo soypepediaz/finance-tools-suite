@@ -65,7 +65,7 @@ def calcular_valor_v3_exacto(cap_entrada, p_entry, p_exit, p_min, p_max):
         tokens_originales = (cap_entrada * 0.5) / p_entry
         tokens_comprados = (cap_entrada * 0.5) / precio_promedio_compra
         return (tokens_originales + tokens_comprados) * p_exit
-    return cap_entrada # Dentro de rango (aprox)
+    return cap_entrada 
 
 def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st, pct_dyn, gas, fee_swap, vol_anual, window_days):
     filas, columnas = precios_matrix.shape
@@ -76,7 +76,7 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
     res_st_final = []
     res_dyn_final = []
     stats_rebalanceos = []
-    log_operaciones = [] # Nueva estructura para la tabla
+    log_operaciones = [] 
     
     progress_bar = st.progress(0)
 
@@ -102,10 +102,7 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
         
         # --- DINÁMICA (Gestión por Operaciones) ---
         cap_dyn = cap_inicial
-        
-        # Variables de estado de la operación actual
         op_start_day = 0
-        p_entry_op = p_inicial
         
         # Rango inicial
         delta_dyn = delta_st * (pct_dyn / 100)
@@ -115,7 +112,6 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
         fees_acumulados_operacion = 0
         num_rebalanceos = 0
         
-        # Mantenemos el ratio de ancho relativo
         ratio_width = delta_dyn / p_inicial
         
         for dia in range(1, filas):
@@ -129,26 +125,31 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
             else:
                 num_rebalanceos += 1
                 
-                # A. Calcular Valor de Salida (Activos Líquidos)
-                # Usamos el centro del rango anterior como referencia de "Entry Price" de esta op
+                # A. Determinar Evento y Precio de Ruptura (Límite del Rango)
+                if p_hoy > p_max_dyn:
+                    evento = "Ruptura Rango Superior ⬆️"
+                    precio_ruptura = p_max_dyn # Precio límite visual
+                else:
+                    evento = "Ruptura Rango Inferior ⬇️"
+                    precio_ruptura = p_min_dyn # Precio límite visual
+                
+                # B. Calcular Valor de Salida (Matemático)
                 p_ref_anterior = (p_max_dyn + p_min_dyn) / 2
                 val_salida_pool = calcular_valor_v3_exacto(cap_dyn, p_ref_anterior, p_hoy, p_min_dyn, p_max_dyn)
                 
-                # B. Calcular IL (Informativo)
+                # C. Calcular IL (Informativo)
                 val_hold = (cap_dyn * 0.5) + ((cap_dyn * 0.5 / p_ref_anterior) * p_hoy)
                 il_realizado = max(0, val_hold - val_salida_pool)
                 
-                # C. Costes
+                # D. Costes
                 coste_swap = val_salida_pool * 0.50 * fee_swap
                 costes_totales = coste_swap + gas
                 
-                # D. Nuevo Capital (Reinversión)
-                # Capital Nuevo = Lo que saco del Pool + Fees Ganados - Costes
+                # E. Nuevo Capital
                 cap_nuevo = val_salida_pool + fees_acumulados_operacion - costes_totales
                 
-                # E. Log (Solo Simulación 1)
+                # F. Log (Solo Simulación 1)
                 if sim_idx == 0:
-                    evento = "Profit Taking (Arriba)" if p_hoy > p_max_dyn else "Stop Loss (Abajo)"
                     log_operaciones.append({
                         "Operación": num_rebalanceos,
                         "Rango Teórico": f"{p_min_dyn:.0f} - {p_max_dyn:.0f}",
@@ -159,20 +160,19 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                         "Costes (Swap+Gas)": costes_totales,
                         "Capital Final": cap_nuevo,
                         "Evento": evento,
-                        "Precio Salida": p_hoy
+                        "Precio Ruptura": precio_ruptura # Usamos el límite del rango
                     })
                 
-                # F. Reset para Siguiente Operación
+                # G. Reset para Siguiente Operación
                 cap_dyn = cap_nuevo
                 op_start_day = dia
                 fees_acumulados_operacion = 0
                 
-                # Nuevo Rango centrado en p_hoy
+                # Nuevo Rango centrado en p_hoy (El rebalanceo se hace al precio real de mercado)
                 nuevo_delta = p_hoy * ratio_width
                 p_min_dyn = p_hoy - nuevo_delta
                 p_max_dyn = p_hoy + nuevo_delta
 
-        # Al final de los días, sumar los fees pendientes de la última operación abierta
         res_dyn_final.append(cap_dyn + fees_acumulados_operacion)
         stats_rebalanceos.append(num_rebalanceos)
 
@@ -197,7 +197,6 @@ c2.metric("Dinámica", f"${m_dyn:,.0f}", f"{m_dyn-capital_inicial:+.0f} $ Netos"
 winner = "Dinámica" if m_dyn > m_st else "Estática"
 c3.metric("Ganador", winner, f"Diferencia: ${m_dyn-m_st:,.0f}")
 
-# Gráficos
 col_g1, col_g2 = st.columns(2)
 with col_g1:
     st.caption("Proyección de Mercado")
@@ -221,7 +220,7 @@ with col_g2:
 
 # --- TABLA DE OPERACIONES ---
 st.subheader("📋 Registro de Operaciones (Simulación #1)")
-st.info("Esta tabla muestra la secuencia de rebalanceos en la primera simulación. El Capital Final de una operación es el Capital Inicial de la siguiente.")
+st.info("Esta tabla muestra la secuencia de rebalanceos en la primera simulación. 'Precio Ruptura' indica el límite del rango donde se realizó la salida.")
 
 if len(log_ops) > 0:
     df_ops = pd.DataFrame(log_ops)
@@ -231,12 +230,27 @@ if len(log_ops) > 0:
         "Pérdida IL (Info)": "${:,.2f}",
         "Costes (Swap+Gas)": "-${:,.2f}",
         "Capital Final": "${:,.2f}",
-        "Precio Salida": "${:,.2f}"
+        "Precio Ruptura": "${:,.2f}"
     }), use_container_width=True)
     
-    # Análisis Final del Log
+    # Análisis Final del Log con Contexto
     total_fees = df_ops["Fees Generados"].sum()
     total_costes = df_ops["Costes (Swap+Gas)"].sum()
-    st.markdown(f"**Resumen Operativo:** En esta simulación se generaron **${total_fees:,.2f}** en fees y se gastaron **${total_costes:,.2f}** en rebalanceos.")
+    ratio_rentabilidad = total_fees / total_costes if total_costes > 0 else 0
+    
+    if ratio_rentabilidad > 1.2:
+        mensaje_analisis = f"✅ **Estrategia Saludable:** Por cada $1 gastado en rebalanceos, has generado ${ratio_rentabilidad:.2f} en fees. La volatilidad ha permitido capturar valor."
+    elif 0.8 <= ratio_rentabilidad <= 1.2:
+        mensaje_analisis = f"⚠️ **Estrategia al Límite:** Estás cambiando el dinero de mano. Generas tantos fees como costes tienes (${ratio_rentabilidad:.2f} de retorno por dólar gastado)."
+    else:
+        mensaje_analisis = f"❌ **Churning (Sobreenfoque):** Estás rebalanceando demasiado. Por cada $1 gastado en costes, solo recuperas ${ratio_rentabilidad:.2f} en fees. Considera ampliar el rango."
+
+    st.markdown(f"""
+    **Resumen Operativo:**
+    * Fees Generados: **${total_fees:,.2f}**
+    * Costes Rebalanceo: **-${total_costes:,.2f}**
+    
+    {mensaje_analisis}
+    """)
 else:
     st.success("En esta simulación no hubo rebalanceos (Hold perfecto).")
