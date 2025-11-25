@@ -276,39 +276,42 @@ with tab1:
 
 
 # ==========================================
-# PESTAÑA 2: BACKTESTING (NUEVA FUNCIONALIDAD)
+# PESTAÑA 2: BACKTESTING (CORREGIDO)
 # ==========================================
 with tab2:
-    st.subheader("Validación con Datos Reales")
+    st.header("Validación con Datos Reales")
+    st.info("Descarga datos de Yahoo Finance y simula tu estrategia en el pasado.")
     
     col_b1, col_b2, col_b3 = st.columns(3)
     with col_b1:
-        ticker = st.text_input("Ticker (Yahoo Finance)", value="BTC-USD", help="Ej: BTC-USD, ETH-USD, SOL-USD")
+        ticker = st.text_input("Ticker", value="BTC-USD", help="Ej: BTC-USD, ETH-USD, SOL-USD")
     with col_b2:
         start_date = st.date_input("Fecha Inicio", value=pd.to_datetime("2024-01-01"))
     with col_b3:
         end_date = st.date_input("Fecha Fin", value=pd.to_datetime("today"))
     
-    if st.button("📉 Ejecutar Backtest con Datos Reales"):
+    if st.button("📉 Ejecutar Backtest con Datos Reales", type="primary"):
         with st.spinner(f"Descargando datos históricos de {ticker}..."):
             try:
-                # 1. Descarga y Preparación
+                # 1. Descarga
                 data = yf.download(ticker, start=start_date, end=end_date, progress=False)
                 
                 if len(data) < 7:
                     st.error("Error: Rango de fechas demasiado corto o sin datos.")
                 else:
-                    # Convertimos a matriz (N_dias, 1_simulacion) para usar TU MISMO motor
+                    # Aplanar datos para evitar problemas de multi-index en versiones nuevas de yfinance
+                    if isinstance(data.columns, pd.MultiIndex):
+                        data.columns = data.columns.get_level_values(0)
+                        
                     precios_real = data['Close'].values.reshape(-1, 1)
                     fechas_real = data.index
                     
-                    # Para el backtest, usamos la volatilidad REAL de ese periodo para calcular el rango estático
-                    # Así vemos qué rango te habría sugerido la herramienta en ese momento
+                    # Cálculo Volatilidad Real
                     log_rets = np.log(data['Close'] / data['Close'].shift(1))
                     vol_real_periodo = log_rets.std() * np.sqrt(365)
-                    st.info(f"Volatilidad Real del Periodo: **{vol_real_periodo*100:.1f}%**")
+                    st.info(f"📊 Volatilidad Real detectada en el periodo: **{vol_real_periodo*100:.1f}%** (Usada para definir rangos)")
                     
-                    # 2. Ejecutar TU motor matemático (El mismo de la pestaña 1)
+                    # 2. Ejecutar Motor
                     res_st, res_dyn, avg_reb, delta_viz, log_ops = ejecutar_analisis_operaciones(
                         precios_real, capital_inicial, apr_base_estatica, std_estatica, 
                         pct_ancho_dinamico, gas_rebalanceo, swap_fee, vol_real_periodo, bb_window
@@ -323,12 +326,11 @@ with tab2:
                     k2.metric("Resultado Dinámico", f"${val_dyn:,.0f}", f"{val_dyn-capital_inicial:+.0f} $")
                     k3.metric("Diferencia", f"${val_dyn-val_st:,.0f}", delta_color="normal")
                     
-                    # 4. Gráfico de Precio + Eventos
+                    # 4. Gráfico
                     st.subheader("Evolución de Precio y Eventos")
                     fig_back = go.Figure()
                     fig_back.add_trace(go.Scatter(x=fechas_real, y=data['Close'], mode='lines', name='Precio', line=dict(color='white', width=1)))
                     
-                    # Pintamos los rebalanceos sobre el gráfico
                     if len(log_ops) > 0:
                         df_log = pd.DataFrame(log_ops)
                         # Mapear índices a fechas reales
@@ -341,7 +343,7 @@ with tab2:
                             name='Rebalanceo'
                         ))
                     
-                    # Rangos Estáticos (Fijos al inicio)
+                    # Rango Estático (Fijo al inicio)
                     p_start = precios_real[0][0]
                     rango_sup = p_start + (p_start * (vol_real_periodo * np.sqrt(bb_window/365) * std_estatica))
                     rango_inf = p_start - (p_start * (vol_real_periodo * np.sqrt(bb_window/365) * std_estatica))
@@ -350,13 +352,18 @@ with tab2:
                     fig_back.update_layout(template="plotly_dark", height=500, title=f"Historia {ticker}")
                     st.plotly_chart(fig_back, use_container_width=True)
                     
-                    # 5. Tabla de Auditoría (Con Fechas Reales)
+                    # 5. Auditoría
                     st.subheader("📋 Auditoría de Operaciones Reales")
                     if len(log_ops) > 0:
                         df_ops = pd.DataFrame(log_ops)
                         df_ops["Fecha"] = [fechas_real[i].strftime('%Y-%m-%d') for i in df_ops['Día Índice']]
                         
-                        # Mostramos tu tabla auditada
+                        # --- CORRECCIÓN DE TIPOS (ESTO SOLUCIONA TU ERROR) ---
+                        cols_numericas = ["Fees Generados", "Costes (Swap+Gas)", "Pérdida IL (Info)", "Capital Final"]
+                        for col in cols_numericas:
+                            df_ops[col] = df_ops[col].astype(float)
+                        # -----------------------------------------------------
+
                         st.dataframe(df_ops[["Operación", "Fecha", "Evento", "Fees Generados", "Costes (Swap+Gas)", "Pérdida IL (Info)", "Capital Final"]].style.format({
                             "Fees Generados": "+${:,.2f}",
                             "Costes (Swap+Gas)": "-${:,.2f}",
@@ -364,7 +371,6 @@ with tab2:
                             "Capital Final": "${:,.2f}"
                         }), use_container_width=True)
                         
-                        # Resumen P&L
                         total_fees = df_ops["Fees Generados"].sum()
                         total_gastos = df_ops["Costes (Swap+Gas)"].sum() + df_ops["Pérdida IL (Info)"].sum()
                         neto = total_fees - total_gastos
@@ -376,4 +382,4 @@ with tab2:
                         c_r3.metric("Neto Real", f"${neto:,.2f}", delta="Ganancia" if neto > 0 else "Pérdida")
 
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error técnico: {e}")
