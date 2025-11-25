@@ -644,14 +644,14 @@ with tab_backtest:
             except Exception as e:
                 st.error(f"Error en el cálculo: {e}")
 
-# --- PESTAÑA 3: BACKTEST DINÁMICO (CORREGIDO) ---
+# --- PESTAÑA 3: BACKTEST DINÁMICO (CORREGIDO: CICLO COMPLETO) ---
 with tab_dynamic_bt:
-    st.markdown("### 🔄 Backtest Dinámico Pro")
+    st.markdown("### 🔄 Backtest Dinámico: 'Defend & Reset'")
     st.info("""
-    **Estrategia Combinada:**
-    1. **Defensa:** Inyecta capital si cae.
-    2. **Take Profit (Reset):** Cierra y reabre si recupera precio entrada.
-    3. **Moonbag:** Si el valor neto dobla la inversión inicial (x2), retira el riesgo y sigue con ganancias.
+    **Estrategia Cíclica:**
+    1. **Defensa:** Si cae, inyectamos capital.
+    2. **Take Profit (Reset):** Si recupera entrada, cerramos y reabrimos.
+    3. **Moonbag (x2):** Si doblamos el capital de riesgo actual, retiramos esa base (Risk Free) y reinvertimos solo las ganancias.
     """)
     
     c1, c2, c3 = st.columns(3)
@@ -660,116 +660,157 @@ with tab_dynamic_bt:
     with c3: dth = st.number_input("Umbral %", 15.0, key="dy_th")/100; run_d = st.button("🚀 Simular Dinámico")
 
     if run_d:
-        with st.spinner("Calculando..."):
+        with st.spinner("Calculando ciclo completo..."):
             try:
                 df = yf.download(dt, start=ds, progress=False)
                 if df.empty: st.error("Sin datos"); st.stop()
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-                wallet = dc
-                invested_net = dc
-                position = None
-                risk_basis = dc  # Base para calcular el x2 del Moonbag
+                # Estado Global
+                wallet_cash = dc        # Dinero disponible para abrir posiciones
+                secured_profit = 0.0    # Dinero retirado (Risk Free)
                 
-                hist = []
-                events = []
-                ext_inj = 0.0
+                # Estado de Posición
+                position = None 
+                current_risk_basis = 0.0 # Cuánto de "mi bolsillo" hay en la posición actual
+                
+                hist = []; events = []; ext_inj = 0.0
                 
                 for d, r in df.iterrows():
                     if pd.isna(r['Close']): continue
                     op, lo, hi, cl = float(r['Open']), float(r['Low']), float(r['High']), float(r['Close'])
                     act = "Hold"
                     
-                    # 1. ABRIR
-                    if position is None:
-                        if wallet > 0:
-                            col = wallet * dl; debt = col - wallet
-                            amt = col / op; liq = debt / (amt * 0.80)
-                            # FIX: Variable 'def' cambiada a 'defended'
-                            position = {"amt": amt, "debt": debt, "liq": liq, "ent": op, "defended": False}
-                            risk_basis = wallet # Reset base de riesgo para el nuevo ciclo
-                            wallet = 0; act = "OPEN"
-                            events.append({
-                                "Fecha": d.date(), "Evento": "🟢 APERTURA", 
-                                "Precio": f"${op:,.0f}", "Detalle": f"Deuda: ${debt:,.0f}", 
-                                "Cantidad": f"{amt:.4f}", "Importe": f"${col:,.0f}"
-                            })
+                    # 1. ABRIR POSICIÓN (Si tenemos cash)
+                    if position is None and wallet_cash > 0:
+                        col = wallet_cash * dl
+                        debt = col - wallet_cash
+                        amt = col / op
+                        liq = debt / (amt * 0.80)
+                        
+                        # Nueva base de riesgo es lo que ponemos ahora
+                        current_risk_basis = wallet_cash 
+                        
+                        position = {
+                            "amt": amt, "debt": debt, "liq": liq, 
+                            "ent": op, "defended": False
+                        }
+                        wallet_cash = 0
+                        act = "OPEN"
+                        events.append({
+                            "Fecha": d.date(), "Evento": "🟢 APERTURA", 
+                            "Precio": f"${op:,.0f}", "Detalle": f"Base Riesgo: ${current_risk_basis:,.0f}",
+                            "Cantidad": f"{amt:.4f}", "Importe": f"${col:,.0f}"
+                        })
                     
                     # 2. GESTIÓN
                     if position:
                         # A. Check Liquidación
                         if lo <= position["liq"]:
-                            position = None; wallet = 0; act = "LIQUIDATED"
-                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida Total", "Cantidad": "-", "Importe": "-"})
+                            position = None; act = "LIQUIDATED"
+                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida Total Posición", "Cantidad": "-", "Importe": "-"})
+                            # No recuperamos nada del wallet_cash, pero conservamos secured_profit
+                        
                         else:
-                            # B. Check Moonbag RECURRENTE (x2 Equity sobre Risk Basis)
+                            # B. Check Moonbag (x2 sobre la base de riesgo actual)
                             curr_eq = (position["amt"] * cl) - position["debt"]
                             
-                            # Si doblamos la base de riesgo actual, retiramos esa base
-                            if curr_eq >= (risk_basis * 2) and risk_basis > 0:
-                                # Retiramos el riesgo (virtualmente o real si cerramos parcial)
-                                # Aquí simulamos que "ya no arriesgamos nuestro dinero"
-                                risk_basis = 0 # Ya es risk free
-                                invested_net = 0 # Ya recuperamos lo puesto
+                            if curr_eq >= (current_risk_basis * 2) and current_risk_basis > 0:
+                                # VENTA TOTAL Y RE-ENTRY
+                                # 1. Cerramos
+                                gross = position["amt"] * cl
+                                net_cash = gross - position["debt"]
+                                
+                                # 2. Retiramos la base de riesgo (al bolsillo seguro)
+                                profit_to_reinvest = net_cash - current_risk_basis
+                                secured_profit += current_risk_basis
+                                
+                                # 3. Preparamos reinversión para mañana (o mismo día)
+                                wallet_cash = profit_to_reinvest
+                                current_risk_basis = 0 # La próxima posición es "dinero de la casa"
+                                position = None # Forzamos reapertura
+                                
                                 act = "MOONBAG 🚀"
                                 events.append({
-                                    "Fecha": d.date(), "Evento": "🚀 MOONBAG (x2)", 
-                                    "Precio": f"${cl:,.0f}", "Detalle": "Inversión Inicial Recuperada",
-                                    "Cantidad": "-", "Importe": "-"
+                                    "Fecha": d.date(), "Evento": "🚀 MOONBAG (Cierre x2)", 
+                                    "Precio": f"${cl:,.0f}", "Detalle": f"Retirado: ${current_risk_basis:,.0f}",
+                                    "Cantidad": "-", "Importe": f"Reinversión: ${wallet_cash:,.0f}"
                                 })
-
+                            
                             # C. Check Defensa
-                            trig = position["liq"] * (1 + dth)
-                            if lo <= trig:
+                            elif position and lo <= (position["liq"] * (1 + dth)):
+                                trig = position["liq"] * (1 + dth)
                                 dp = min(op, trig); nl = dp * 0.80; na = position["debt"] / (nl * 0.80)
                                 add = na - position["amt"]
                                 if add > 0:
                                     cost = add * dp
                                     ext_inj += cost
-                                    if risk_basis > 0: # Si aún arriesgamos dinero propio
-                                        invested_net += cost
-                                        risk_basis += cost
-                                        
+                                    # Si estamos jugando con dinero propio, aumentamos la base de riesgo
+                                    # Si era dinero de la casa, ahora volvemos a arriesgar dinero externo
+                                    current_risk_basis += cost 
+                                    
                                     position["amt"] += add; position["liq"] = nl
                                     position["defended"] = True; act = "DEFENDED"
                                     events.append({
                                         "Fecha": d.date(), "Evento": "🛡️ DEFENSA", 
                                         "Precio": f"${dp:,.0f}", "Detalle": f"Nuevo Liq: ${nl:,.0f}",
-                                        "Cantidad": f"{add:.4f}", "Importe": f"${cost:,.0f}"
+                                        "Cantidad": f"{add:.4f}", "Importe": f"Inyección: ${cost:,.0f}"
                                     })
                             
-                            # D. Check Reset
-                            if position["defended"] and hi >= position["ent"]:
+                            # D. Check Reset (Take Profit al recuperar entrada tras defensa)
+                            elif position and position["defended"] and hi >= position["ent"]:
                                 ep = position["ent"]
                                 gross = position["amt"] * ep
-                                net = gross - position["debt"]
-                                wallet = net; position = None; act = "RESET"
+                                net_cash = gross - position["debt"]
+                                
+                                wallet_cash = net_cash
+                                position = None
+                                act = "RESET"
                                 events.append({
-                                    "Fecha": d.date(), "Evento": "💰 TAKE PROFIT", 
-                                    "Precio": f"${ep:,.0f}", "Detalle": f"Cash generado: ${net:,.0f}",
-                                    "Cantidad": "-", "Importe": "-"
+                                    "Fecha": d.date(), "Evento": "💰 RESET (PROFIT)", 
+                                    "Precio": f"${ep:,.0f}", "Detalle": "Cierre tras recuperación",
+                                    "Cantidad": "-", "Importe": f"Cash: ${net_cash:,.0f}"
                                 })
 
-                    # Registro
-                    eq = wallet
-                    if position: eq += (position["amt"] * cl) - position["debt"]
-                    hist.append({"Fecha": d, "Equity Neto": eq - ext_inj, "Inversión Total": invested_net})
+                    # Registro Diario
+                    # Equity Total = (Cash en mano) + (Valor Posición) + (Beneficio Asegurado)
+                    total_equity = wallet_cash + secured_profit
+                    if position:
+                        pos_val = (position["amt"] * cl) - position["debt"]
+                        total_equity += pos_val
+                    
+                    # Para el ROI, comparamos lo que tenemos vs lo que pusimos de nuestro bolsillo
+                    total_invested_from_pocket = dc + ext_inj
+                    
+                    hist.append({
+                        "Fecha": d, 
+                        "Total Equity": total_equity,
+                        "Inversión Externa": total_invested_from_pocket,
+                        "HODL": (dc / df.iloc[0]['Close']) * cl # Referencia HODL simple
+                    })
 
                 df_r = pd.DataFrame(hist).set_index("Fecha")
-                final_net = df_r.iloc[-1]["Equity Neto"]
-                roi = ((final_net - dc) / dc) * 100
+                final_eq = df_r.iloc[-1]["Total Equity"]
+                final_inv = df_r.iloc[-1]["Inversión Externa"]
+                final_hodl = df_r.iloc[-1]["HODL"]
+                
+                roi_strat = ((final_eq - final_inv) / final_inv) * 100
+                roi_hodl = ((final_hodl - dc) / dc) * 100
                 
                 st.divider()
-                st.subheader(f"📊 Informe de Resultados: {dt}")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Capital Final (Neto)", f"${final_net:,.0f}", delta=f"{roi:.2f}% ROI")
-                m2.metric("Dinero Extra Inyectado", f"${ext_inj:,.0f}")
-                m3.metric("Total Operaciones", len(events))
-                st.line_chart(df_r["Equity Neto"])
+                st.subheader(f"📊 Informe: {dt}")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Capital Final", f"${final_eq:,.0f}")
+                m2.metric("ROI Estrategia", f"{roi_strat:.2f}%")
+                m3.metric("Vs HODL", f"{roi_hodl:.2f}%", delta=f"{roi_strat - roi_hodl:.2f}% diff")
+                m4.metric("Capital Externo Usado", f"${final_inv:,.0f}")
+                
+                st.line_chart(df_r[["Total Equity", "HODL"]])
+                
                 with st.expander("📜 Ver Diario de Operaciones", expanded=True):
-                    if events: st.dataframe(pd.DataFrame(events), use_container_width=True)
-                    else: st.info("No hubo eventos.")
-            except Exception as e: st.error(str(e))
+                    if events: st.dataframe(pd.DataFrame(events), use_container_width=True, hide_index=True)
+                    else: st.info("HODL tranquilo (Sin eventos).")
+            except Exception as e: st.error(f"Error: {e}")
 
 # ------------------------------------------------------------------------------
 #  PESTAÑA 4: ESCÁNER REAL (MODO SEGURO + MEMORIA)
