@@ -645,220 +645,142 @@ with tab_backtest:
                 st.error(f"Error en el cálculo: {e}")
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 3: BACKTEST DINÁMICO (ESTRATEGIA DE ACUMULACIÓN BTC)
+#  PESTAÑA 3: BACKTEST DINÁMICO (ACUMULACIÓN)
 # ------------------------------------------------------------------------------
 with tab_dynamic_bt:
     st.markdown("### 🔄 Backtest Dinámico: 'Accumulator Mode'")
     st.info("""
-    **Objetivo: Acumular Bitcoin (u otro activo) gratis.**
-    1. **Entrada:** Compramos X cantidad de tokens (Capital + Deuda).
-    2. **Defensa:** Si cae, inyectamos USD para salvar la posición.
-    3. **Moonbag:** Cuando el valor neto permita recuperar la inversión, **retiramos los tokens iniciales** y reinvertimos solo las ganancias.
+    **Estrategia de Acumulación:**
+    1. **Defensa:** Inyecta capital si cae.
+    2. **Moonbag (x2):** Si la posición dobla valor, **retira los tokens iniciales** y reinicia la estrategia con las ganancias.
     """)
     
-    col_dyn1, col_dyn2, col_dyn3 = st.columns(3)
-    with col_dyn1:
+    c1, c2, c3 = st.columns(3)
+    with c1:
         dyn_ticker = st.text_input("Ticker", "BTC-USD", key="dy_t")
         dyn_capital = st.number_input("Capital Inicial ($)", 10000.0, key="dy_c")
-    with col_dyn2:
-        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*4), key="dy_d") # 4 años por defecto
+    with c2:
+        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*4), key="dy_d")
         dyn_lev = st.slider("Apalancamiento Objetivo", 1.1, 4.0, 2.0, key="dy_l")
-    with col_dyn3:
+    with c3:
         dyn_th = st.number_input("Umbral Defensa (%)", 15.0, key="dy_th") / 100.0
         run_dyn = st.button("🚀 Simular Acumulación", type="primary")
 
     if run_dyn:
-        with st.spinner("Simulando estrategia de acumulación..."):
+        with st.spinner("Simulando estrategia..."):
             try:
                 df = yf.download(dyn_ticker, start=dyn_start, progress=False)
                 if df.empty: st.error("Sin datos"); st.stop()
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-                # --- ESTADO INICIAL ---
-                wallet_usd = dyn_capital    # Dinero disponible para abrir
-                btc_hodl_bag = 0.0          # Cantidad de Tokens acumulados (Risk Free)
-                
-                # Métricas de rendimiento
-                total_usd_injected = 0.0    
+                # Estado Inicial
+                wallet_usd = dyn_capital
+                accumulated_tokens = 0.0 # AQUÍ SE GUARDAN LOS BTC RETIRADOS
                 
                 position = None 
-                # Estructura corregida:
-                # {
-                #   "total_amt": Total tokens en Aave
-                #   "debt_usd":  Deuda en USD
-                #   "liq":       Precio Liq
-                #   "initial_stack": La cantidad de BTC que pusimos al abrir (Nuestro objetivo a recuperar)
-                #   "defended":  Flag
-                # }
-
-                hist = []
-                events = []
+                hist = []; events = []; ext_inj = 0.0
                 
                 for d, r in df.iterrows():
                     if pd.isna(r['Close']): continue
                     op, lo, hi, cl = float(r['Open']), float(r['Low']), float(r['High']), float(r['Close'])
                     
-                    # 1. ABRIR POSICIÓN
+                    # 1. ABRIR
                     if position is None and wallet_usd > 0:
-                        col_usd = wallet_usd * dyn_lev
-                        debt = col_usd - wallet_usd
+                        col = wallet_usd * dyn_lev
+                        debt = col - wallet_usd
+                        total_amt = col / op
+                        own_amt = wallet_usd / op 
+                        liq = debt / (total_amt * 0.80)
                         
-                        total_amt = col_usd / op
-                        my_initial_tokens = wallet_usd / op # Estos son los que quiero recuperar
-                        
-                        liq = debt / (total_amt * 0.80) # LTV 80%
-                        
+                        # risk_base: Valor USD de lo que arriesgo en este ciclo
                         position = {
-                            "total_amt": total_amt,
-                            "debt_usd": debt,
-                            "liq": liq,
-                            "initial_stack": my_initial_tokens, # <--- NOMBRE CORREGIDO
-                            "defended": False
+                            "total_amt": total_amt, "debt": debt, "liq": liq,
+                            "initial_stack": own_amt, "risk_base": wallet_usd
                         }
-                        
                         wallet_usd = 0
-                        events.append({
-                            "Fecha": d.date(), "Evento": "🟢 APERTURA", 
-                            "Precio": f"${op:,.0f}", 
-                            "Detalle": f"Stack Inicial: {my_initial_tokens:.4f} tokens", 
-                            "Info Extra": f"Deuda: ${debt:,.0f}"
-                        })
+                        events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Precio": f"${op:,.0f}", "Detalle": f"Stack: {own_amt:.4f}", "Info Extra": f"Deuda: ${debt:,.0f}"})
 
                     # 2. GESTIÓN
                     if position:
-                        # A. LIQUIDACIÓN
-                        if lo <= position["liq"]:
+                        if lo <= position["liq"]: # LIQ
                             position = None; wallet_usd = 0
-                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida total de la posición", "Info Extra": "-"})
+                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida Total", "Info Extra": "-"})
                         
                         else:
-                            # B. MOONBAG (Recuperar mis BTC)
-                            # Valor Neto (Equity) = (Tokens * Precio) - Deuda
-                            curr_equity_usd = (position["total_amt"] * cl) - position["debt_usd"]
+                            # Moonbag: Equity > 2 * Risk Base
+                            curr_equity = (position["total_amt"] * cl) - position["debt"]
                             
-                            # Valor de mi Stack inicial hoy
-                            value_of_initial_stack = position["initial_stack"] * cl
-                            
-                            # Condición de éxito: 
-                            # Si el Equity actual es suficiente para sacar mis tokens Y sobra algo decente para seguir
-                            # (Por ejemplo, si equity >= 2 * valor_inicial, o simplemente si hay beneficio sustancial)
-                            # Usaremos el x2 clásico sobre el valor USD invertido en este ciclo para asegurar viabilidad
-                            
-                            invested_usd_this_cycle = position["initial_stack"] * position["liq"] * 0.80 * dyn_lev # Aprox value at entry
-                            # Simplificación robusta: Si Equity > 2 * Valor de lo que quiero sacar
-                            
-                            if curr_equity_usd >= (value_of_initial_stack * 2):
-                                
-                                # 1. Retirar mis tokens a la saca
+                            # Solo si hay riesgo vivo (risk_base > 0)
+                            if position["risk_base"] > 0 and curr_equity >= (position["risk_base"] * 2):
+                                # Retiramos tokens
                                 tokens_out = position["initial_stack"]
-                                btc_hodl_bag += tokens_out
+                                accumulated_tokens += tokens_to_withdraw = tokens_out
                                 
-                                # 2. Calcular qué nos queda (Beneficios)
-                                remaining_equity_usd = curr_equity_usd - value_of_initial_stack
+                                # Equity restante para reinvertir
+                                initial_val_now = tokens_out * cl
+                                remaining_eq = curr_equity - initial_val_now
                                 
-                                # 3. Reinvertir Beneficios (Compound)
-                                # Cerramos la posición vieja lógicamente y abrimos una nueva con el remanente
-                                wallet_usd = remaining_equity_usd
-                                position = None # Forzamos reapertura en el siguiente ciclo con el nuevo capital
+                                wallet_usd = remaining_eq
+                                position = None # Cierre y reapertura mañana
                                 
-                                events.append({
-                                    "Fecha": d.date(), "Evento": "🚀 MOONBAG", 
-                                    "Precio": f"${cl:,.0f}", 
-                                    "Detalle": f"Retirados {tokens_out:.4f} tokens", 
-                                    "Info Extra": f"Reinvierte: ${wallet_usd:,.0f}"
-                                })
+                                events.append({"Fecha": d.date(), "Evento": "🚀 MOONBAG", "Precio": f"${cl:,.0f}", "Detalle": f"Retirados {tokens_out:.4f}", "Info Extra": f"Reinvierte: ${wallet_usd:,.0f}"})
 
-                            # C. DEFENSA
+                            # Defensa
                             elif position and lo <= (position["liq"] * (1 + dyn_th)):
                                 trig = position["liq"] * (1 + dyn_th)
                                 dp = min(op, trig)
-                                
-                                # Objetivo: Alejar liquidación 20%
-                                target_liq = dp * 0.80
-                                # Deuda / (Tokens * 0.80) = Target  -> Tokens = Deuda / (Target * 0.80)
-                                needed_total = position["debt_usd"] / (target_liq * 0.80)
-                                add_tokens = needed_total - position["total_amt"]
-                                
-                                if add_tokens > 0:
-                                    cost_usd = add_tokens * dp
-                                    total_usd_injected += cost_usd
-                                    
-                                    # Actualizamos posición
-                                    position["total_amt"] += add_tokens
-                                    # Al inyectar, aumentamos nuestro "Stack" personal en la posición
-                                    position["initial_stack"] += add_tokens 
-                                    position["liq"] = target_liq
-                                    position["defended"] = True
-                                    
-                                    events.append({
-                                        "Fecha": d.date(), "Evento": "🛡️ DEFENSA", 
-                                        "Precio": f"${dp:,.0f}", 
-                                        "Detalle": f"Inyectados ${cost_usd:,.0f}", 
-                                        "Info Extra": f"+{add_tokens:.4f} tokens"
-                                    })
+                                nl = dp * 0.80
+                                needed = position["debt"] / (nl * 0.80)
+                                add = needed - position["total_amt"]
+                                if add > 0:
+                                    cost = add * dp
+                                    ext_inj += cost
+                                    position["total_amt"] += add
+                                    position["initial_stack"] += add # Aumenta lo "mío"
+                                    position["risk_base"] += cost # Aumenta riesgo
+                                    position["liq"] = nl
+                                    events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Precio": f"${dp:,.0f}", "Detalle": f"Inyección: ${cost:,.0f}", "Info Extra": f"+{add:.4f} tokens"})
 
-                    # --- REGISTRO DIARIO ---
-                    # Valor Total = (Tokens HODL * Precio) + (Equity Estrategia) + (Cash)
-                    val_hodl_bag = btc_hodl_bag * cl
-                    val_strategy = 0
-                    if position:
-                        val_strategy = (position["total_amt"] * cl) - position["debt_usd"]
+                    # Registro
+                    val_hodl = accumulated_tokens * cl
+                    val_strat = 0
+                    if position: val_strat = (position["total_amt"] * cl) - position["debt"]
                     
-                    total_wealth = val_hodl_bag + val_strategy + wallet_usd
+                    total_wealth = val_hodl + val_strat + wallet_usd
+                    invested_total = dyn_capital + ext_inj
                     
-                    # Comparativa HODL Estático (Capital Inicial comprado en T0 y never sold)
-                    initial_price = df.iloc[0]['Close']
-                    static_hodl_tokens = dyn_capital / initial_price
-                    val_static_hodl = static_hodl_tokens * cl
-                    
-                    # Inversión de Bolsillo (Inicial + Defensas)
-                    total_invested = dyn_capital + total_usd_injected
+                    # Comparativa HODL Pasivo
+                    static_hodl_val = (dyn_capital / df.iloc[0]['Close']) * cl
                     
                     hist.append({
-                        "Fecha": d,
-                        "Riqueza Total ($)": total_wealth,
-                        "HODL Pasivo ($)": val_static_hodl,
-                        "Tokens Acumulados": btc_hodl_bag,
-                        "Inversión Total ($)": total_invested
+                        "Fecha": d, "Riqueza Total": total_wealth, 
+                        "Inversión Total": invested_total, 
+                        "HODL Pasivo": static_hodl_val
                     })
 
-                # --- INFORME FINAL ---
                 df_r = pd.DataFrame(hist).set_index("Fecha")
-                final_wealth = df_r.iloc[-1]["Riqueza Total ($)"]
-                final_invested = df_r.iloc[-1]["Inversión Total ($)"]
-                
-                roi = ((final_wealth - final_invested) / final_invested) * 100
+                final_w = df_r.iloc[-1]["Riqueza Total"]
+                final_i = df_r.iloc[-1]["Inversión Total"]
+                final_h = df_r.iloc[-1]["HODL Pasivo"]
+                roi = ((final_w - final_i)/final_i)*100
                 
                 st.divider()
-                st.subheader(f"📊 Informe de Acumulación: {dyn_ticker}")
-                
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Patrimonio Final", f"${final_wealth:,.0f}", delta=f"{roi:.2f}% ROI")
-                m2.metric("Tokens 'Risk Free'", f"{btc_hodl_bag:.4f}", help="Tokens retirados y seguros")
-                m3.metric("Dinero Extra Inyectado", f"${total_usd_injected:,.0f}")
-                m4.metric("Total Operaciones", len(events))
+                m1.metric("Patrimonio Final", f"${final_w:,.0f}", delta=f"{roi:.2f}% ROI")
+                m2.metric("Tokens Acumulados", f"{accumulated_tokens:.4f}", help="Tokens en caja fuerte")
+                m3.metric("Vs HODL Pasivo", f"${final_h:,.0f}", delta=f"${final_w - final_h:,.0f}")
+                m4.metric("Inversión Total", f"${final_i:,.0f}")
                 
-                # Gráfica
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["Riqueza Total ($)"], name="Estrategia (Acumulación)", line=dict(color="#00CC96", width=2)))
-                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["HODL Pasivo ($)"], name="HODL Pasivo (Buy & Hold)", line=dict(color="gray", dash="dot")))
+                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["Riqueza Total"], name="Estrategia (Acumulación)", line=dict(color="#00CC96", width=2)))
+                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["HODL Pasivo"], name="HODL Pasivo", line=dict(color="gray", dash="dot")))
                 st.plotly_chart(fig, use_container_width=True)
                 
-                with st.expander("📜 Ver Diario de Operaciones", expanded=True):
-                    if events:
-                        st.dataframe(
-                            pd.DataFrame(events), 
-                            use_container_width=True, 
-                            hide_index=True,
-                            column_config={
-                                "Precio": st.column_config.TextColumn("Precio Mercado"),
-                                "Info Extra": st.column_config.TextColumn("Info Adicional")
-                            }
-                        )
-                    else:
-                        st.info("Sin operaciones.")
+                with st.expander("📜 Diario de Operaciones"):
+                    if events: st.dataframe(pd.DataFrame(events), use_container_width=True)
+                    else: st.info("Sin operaciones.")
 
-            except Exception as e: st.error(f"Error en simulación: {e}")
+            except Exception as e: st.error(f"Error: {e}")
 
 # ------------------------------------------------------------------------------
 #  PESTAÑA 4: ESCÁNER REAL (MODO SEGURO + MEMORIA)
