@@ -645,154 +645,201 @@ with tab_backtest:
                 st.error(f"Error en el cálculo: {e}")
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 3: BACKTEST DINÁMICO (CON COMPARATIVA HODL)
+#  PESTAÑA 3: BACKTEST DINÁMICO (ACUMULACIÓN DE ACTIVOS REALE)
 # ------------------------------------------------------------------------------
 with tab_dynamic_bt:
-    st.markdown("### 🔄 Backtest Dinámico: 'Defend & Reset'")
+    st.markdown("### 🔄 Backtest Dinámico: 'Accumulator Mode'")
     st.info("""
-    **Estrategia Cíclica:**
-    1. **Defensa:** Inyecta capital si cae.
-    2. **Take Profit (Reset):** Si recupera entrada, cerramos y reabrimos.
-    3. **Moonbag (x2):** Si dobla la base de riesgo, retiramos capital y seguimos con ganancias.
+    **Estrategia de Acumulación Real:**
+    1. **Defensa:** Si cae, inyectamos capital (USD) para salvar la posición.
+    2. **Moonbag (x2):** Si el valor neto dobla el riesgo, **retiramos los tokens equivalentes a la inversión inicial** a una billetera fría (HODL).
+    3. **Compounding:** El beneficio restante se usa para abrir una nueva posición apalancada automáticamente.
     """)
     
-    c1, c2, c3 = st.columns(3)
-    with c1: 
-        dt = st.text_input("Ticker", "BTC-USD", key="dy_t")
-        dc = st.number_input("Capital Inicial ($)", 10000.0, key="dy_c")
-    with c2: 
-        ds = st.date_input("Inicio", date.today() - timedelta(days=365*2), key="dy_d")
-        dl = st.slider("Lev Objetivo", 1.1, 4.0, 2.0, key="dy_l")
-    with c3: 
-        dth = st.number_input("Umbral Defensa (%)", 15.0, key="dy_th") / 100.0
-        run_d = st.button("🚀 Simular Dinámico")
+    col_dyn1, col_dyn2, col_dyn3 = st.columns(3)
+    with col_dyn1:
+        dyn_ticker = st.text_input("Ticker", "BTC-USD", key="dy_t")
+        dyn_capital = st.number_input("Capital Inicial ($)", 10000.0, key="dy_c")
+    with col_dyn2:
+        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*2), key="dy_d")
+        dyn_lev = st.slider("Lev Objetivo", 1.1, 4.0, 2.0, key="dy_l")
+    with col_dyn3:
+        dyn_th = st.number_input("Umbral Defensa (%)", 15.0, key="dy_th") / 100.0
+        run_dyn = st.button("🚀 Simular Acumulación", type="primary")
 
-    if run_d:
-        with st.spinner("Calculando ciclo completo vs HODL..."):
+    if run_dyn:
+        with st.spinner("Simulando estrategia de acumulación..."):
             try:
-                df = yf.download(dt, start=ds, progress=False)
+                df = yf.download(dyn_ticker, start=dyn_start, progress=False)
                 if df.empty: st.error("Sin datos"); st.stop()
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-                # --- VARIABLES ESTRATEGIA ---
-                wallet = dc        
-                invested_net = dc  
+                # --- ESTADO INICIAL ---
+                wallet_usd = dyn_capital    # Dinero disponible para abrir posiciones
+                
+                # AQUÍ ESTÁ EL CAMBIO: Guardamos tokens, no dólares
+                accumulated_tokens = 0.0    
+                
                 position = None 
-                moonbag_done = False
-                risk_basis = dc
-                accumulated_profits = 0.0 
-                ext_inj = 0.0
+                risk_basis = dyn_capital    # Base de riesgo para calcular el x2
                 
-                # --- VARIABLES HODL (BENCHMARK) ---
-                start_price_hodl = float(df.iloc[0]['Close'])
-                hodl_amount = dc / start_price_hodl # Cantidad de BTC si hubieras comprado a pelo
-                
-                hist = []; events = []
+                hist = []
+                events = []
+                ext_inj = 0.0               # Inyecciones externas totales
                 
                 for d, r in df.iterrows():
                     if pd.isna(r['Close']): continue
                     op, lo, hi, cl = float(r['Open']), float(r['Low']), float(r['High']), float(r['Close'])
+                    act = "Hold"
                     
-                    # 1. ABRIR
-                    if position is None and wallet > 0:
-                        col = wallet * dl; debt = col - wallet
-                        amt = col / op; liq = debt / (amt * 0.80)
-                        risk_basis = wallet 
+                    # 1. ABRIR POSICIÓN (Si tenemos cash)
+                    if position is None and wallet_usd > 0:
+                        col = wallet_usd * dyn_lev
+                        debt = col - wallet_usd
+                        amt = col / op
+                        liq = debt / (amt * 0.80)
+                        
+                        # Al abrir, reseteamos la base de riesgo al dinero que acabamos de poner
+                        risk_basis = wallet_usd 
+                        
                         position = {"amt": amt, "debt": debt, "liq": liq, "ent": op, "def": False}
-                        wallet = 0
-                        events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Precio": f"${op:,.0f}", "Detalle": f"Base: ${risk_basis:,.0f}", "Cantidad": f"{amt:.4f}", "Importe": f"${col:,.0f}"})
+                        wallet_usd = 0
+                        act = "OPEN"
+                        events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Precio": f"${op:,.0f}", "Detalle": f"Tokens: {amt:.4f}", "Info Extra": f"Deuda: ${debt:,.0f}"})
                     
                     # 2. GESTIÓN
                     if position:
-                        # A. Liquidación
+                        # A. LIQUIDACIÓN
                         if lo <= position["liq"]:
-                            position = None; wallet = 0
-                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida Total", "Cantidad": "-", "Importe": "-"})
+                            position = None; wallet_usd = 0; act = "LIQUIDATED"
+                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida Total Posición", "Info Extra": "-"})
+                        
                         else:
-                            # B. Moonbag (x2)
-                            curr_eq = (position["amt"] * cl) - position["debt"]
-                            if curr_eq >= (risk_basis * 2) and risk_basis > 0:
-                                gross = position["amt"] * cl
-                                net_cash = gross - position["debt"]
-                                profit_to_keep = risk_basis 
-                                accumulated_profits += profit_to_keep 
-                                wallet = net_cash - profit_to_keep 
-                                position = None 
-                                moonbag_done = True
-                                invested_net -= profit_to_keep 
-                                risk_basis = 0 
-                                events.append({"Fecha": d.date(), "Evento": "🚀 MOONBAG", "Precio": f"${cl:,.0f}", "Detalle": f"Retirado: ${profit_to_keep:,.0f}", "Cantidad": "-", "Importe": f"Reinvierte: ${wallet:,.0f}"})
+                            # B. MOONBAG (ACUMULACIÓN DE TOKENS)
+                            # Calculamos Equity actual
+                            curr_equity_usd = (position["amt"] * cl) - position["debt"]
+                            
+                            # Si doblamos la base de riesgo (x2)
+                            if curr_equity_usd >= (risk_basis * 2) and risk_basis > 0:
+                                # 1. Calculamos cuántos tokens equivalen a mi inversión inicial (Risk Basis)
+                                #    Estos son los que quiero "salvar"
+                                tokens_to_withdraw = risk_basis / cl
+                                
+                                # 2. Los sacamos de la estrategia
+                                accumulated_tokens += tokens_to_withdraw
+                                
+                                # 3. El resto del Equity (Beneficios) se queda para reabrir
+                                remaining_equity = curr_equity_usd - risk_basis
+                                
+                                # 4. Cerramos y Reabrimos (Rebalanceo virtual)
+                                #    Usamos el remaining_equity para abrir una nueva posición limpia al apalancamiento objetivo
+                                wallet_usd = remaining_equity
+                                position = None # Forzamos reapertura en la siguiente iteración o lógica inmediata
+                                
+                                # Marcamos que ya no hay riesgo de mi bolsillo en la siguiente jugada
+                                # (Opcional: Si quieres que el siguiente x2 sea sobre el nuevo capital, descomenta abajo)
+                                # risk_basis = remaining_equity 
+                                
+                                act = "MOONBAG 🚀"
+                                events.append({
+                                    "Fecha": d.date(), "Evento": "🚀 MOONBAG", 
+                                    "Precio": f"${cl:,.0f}", 
+                                    "Detalle": f"Retirados {tokens_to_withdraw:.4f} tokens", 
+                                    "Info Extra": f"Valor Retirado: ${risk_basis:,.0f}"
+                                })
+                                
+                                # NOTA: Como position=None, en la siguiente línea del bucle (o siguiente día) se reabrirá.
 
-                            # C. Defensa
-                            elif position and lo <= (position["liq"] * (1 + dth)):
-                                trig = position["liq"] * (1 + dth)
-                                dp = min(op, trig); nl = dp * 0.80; na = position["debt"] / (nl * 0.80)
-                                add = na - position["amt"]
+                            # C. DEFENSA
+                            elif position and lo <= (position["liq"] * (1 + dyn_th)):
+                                trig = position["liq"] * (1 + dyn_th)
+                                dp = min(op, trig); nl = dp * 0.80
+                                # Para bajar liquidación, necesitamos menos deuda o más colateral. 
+                                # Aquí añadimos colateral.
+                                needed_amt_total = position["debt"] / (nl * 0.80)
+                                add = needed_amt_total - position["amt"]
+                                
                                 if add > 0:
                                     cost = add * dp
                                     ext_inj += cost
-                                    if risk_basis > 0: invested_net += cost; risk_basis += cost
-                                    position["amt"] += add; position["liq"] = nl; position["def"] = True
-                                    events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Precio": f"${dp:,.0f}", "Detalle": f"Liq: ${nl:,.0f}", "Cantidad": f"{add:.4f}", "Importe": f"${cost:,.0f}"})
-                            
-                            # D. Reset
-                            elif position and position["def"] and hi >= position["ent"]:
-                                ep = position["ent"]; gross = position["amt"] * ep; net = gross - position["debt"]
-                                wallet = net; position = None
-                                events.append({"Fecha": d.date(), "Evento": "💰 RESET", "Precio": f"${ep:,.0f}", "Detalle": "Cierre", "Cantidad": "-", "Importe": f"Cash: ${net:,.0f}"})
+                                    # Si inyectamos dinero, aumentamos nuestra base de riesgo
+                                    risk_basis += cost
+                                    
+                                    position["amt"] += add; position["liq"] = nl
+                                    position["def"] = True; act = "DEFENDED"
+                                    events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Precio": f"${dp:,.0f}", "Detalle": f"Inyección: ${cost:,.0f}", "Info Extra": f"+{add:.4f} tokens"})
 
-                    # 3. CÁLCULOS FINALES DEL DÍA
-                    
-                    # Valor Estrategia Dinámica
-                    strat_equity = wallet + accumulated_profits
+                            # D. RESET (TAKE PROFIT TRAS DEFENSA)
+                            # Si defendimos y recuperamos entrada, cerramos para limpiar deuda
+                            elif position and position["def"] and hi >= position["ent"]:
+                                ep = position["ent"]
+                                gross = position["amt"] * ep
+                                net = gross - position["debt"]
+                                wallet_usd = net
+                                position = None
+                                act = "RESET"
+                                events.append({"Fecha": d.date(), "Evento": "💰 RESET", "Precio": f"${ep:,.0f}", "Detalle": "Cierre Táctico", "Info Extra": f"Cash: ${net:,.0f}"})
+
+                    # --- REGISTRO DIARIO ---
+                    # Valor Total = (Equity en Estrategia) + (Valor de Tokens Acumulados) + (Cash en mano)
+                    strat_equity = 0
                     if position:
-                        strat_equity += (position["amt"] * cl) - position["debt"]
+                        strat_equity = (position["amt"] * cl) - position["debt"]
                     
-                    # Valor HODL Pasivo
-                    hodl_equity = hodl_amount * cl
+                    hodl_bag_val = accumulated_tokens * cl
+                    
+                    total_wealth = strat_equity + hodl_bag_val + wallet_usd
+                    
+                    # Inversión Total Real = Capital Inicial + Inyecciones Externas
+                    real_investment = dyn_capital + ext_inj
+                    
+                    # Comparativa: Si hubiera hecho HODL desde el día 1 con el capital inicial
+                    # (Sin contar inyecciones posteriores para ser justos con el coste de oportunidad inicial)
+                    hodl_only_val = (dyn_capital / df.iloc[0]['Close']) * cl
                     
                     hist.append({
-                        "Fecha": d, 
-                        "Estrategia ($)": strat_equity, 
-                        "HODL ($)": hodl_equity,
-                        "Inversión Externa ($)": dc + ext_inj
+                        "Fecha": d,
+                        "Riqueza Total ($)": total_wealth,
+                        "HODL Pasivo ($)": hodl_only_val,
+                        "Tokens HODL": accumulated_tokens,
+                        "Inversión Total ($)": real_investment
                     })
 
-                # --- RESULTADOS ---
+                # --- INFORME FINAL ---
                 df_r = pd.DataFrame(hist).set_index("Fecha")
-                final_strat = df_r.iloc[-1]["Estrategia ($)"]
-                final_hodl = df_r.iloc[-1]["HODL ($)"]
+                final_wealth = df_r.iloc[-1]["Riqueza Total ($)"]
+                final_inv = df_r.iloc[-1]["Inversión Total ($)"]
+                final_hodl = df_r.iloc[-1]["HODL Pasivo ($)"]
                 
-                # ROI Neto (sobre capital inicial)
-                roi_strat = ((final_strat - dc) / dc) * 100
-                roi_hodl = ((final_hodl - dc) / dc) * 100
-                
+                roi = ((final_wealth - final_inv) / final_inv) * 100
+                roi_hodl = ((final_hodl - dyn_capital) / dyn_capital) * 100
+
                 st.divider()
-                st.subheader(f"📊 Comparativa de Rendimiento: {dt}")
+                st.subheader(f"📊 Informe de Acumulación: {dyn_ticker}")
                 
-                # KPIs
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Estrategia Final", f"${final_strat:,.0f}", delta=f"{roi_strat:.2f}% ROI")
-                k2.metric("HODL Pasivo", f"${final_hodl:,.0f}", delta=f"{roi_hodl:.2f}% ROI")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Patrimonio Final", f"${final_wealth:,.0f}", delta=f"{roi:.2f}% ROI")
+                m2.metric("Vs HODL Pasivo", f"${final_hodl:,.0f}", delta=f"{roi - roi_hodl:.2f}% Diff")
+                m3.metric("Tokens 'Gratis' (HODL)", f"{accumulated_tokens:.4f}", help="Tokens retirados de la estrategia y asegurados")
+                m4.metric("Inversión (Cap + Def)", f"${final_inv:,.0f}")
                 
-                # Diferencia
-                diff_usd = final_strat - final_hodl
-                k3.metric("Diferencia vs HODL", f"${diff_usd:,.0f}", delta_color="normal" if diff_usd > 0 else "inverse")
-                
-                k4.metric("Inversión Total (con Defensas)", f"${dc + ext_inj:,.0f}", help=f"Inicial: ${dc:,.0f} + Inyecciones: ${ext_inj:,.0f}")
-                
-                # --- GRÁFICO COMPARATIVO ---
+                # Gráfica
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["Estrategia ($)"], name='Estrategia Dinámica', line=dict(color='#00CC96', width=2)))
-                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["HODL ($)"], name='Solo HODL (Sin hacer nada)', line=dict(color='gray', dash='dot')))
-                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["Inversión Externa ($)"], name='Dinero Invertido', line=dict(color='#EF553B', width=1)))
-                
-                fig.update_layout(title="Curva de Patrimonio", hovermode="x unified")
+                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["Riqueza Total ($)"], name="Estrategia (Acumulación)", line=dict(color="#00CC96", width=2)))
+                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["HODL Pasivo ($)"], name="HODL Pasivo", line=dict(color="gray", dash="dot")))
                 st.plotly_chart(fig, use_container_width=True)
                 
                 with st.expander("📜 Ver Diario de Operaciones", expanded=True):
                     if events:
-                        st.dataframe(pd.DataFrame(events), use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            pd.DataFrame(events), 
+                            use_container_width=True, 
+                            hide_index=True,
+                            column_config={
+                                "Precio": st.column_config.TextColumn("Precio Mercado"),
+                                "Info Extra": st.column_config.TextColumn("Info Adicional")
+                            }
+                        )
                     else:
                         st.info("Sin operaciones.")
 
