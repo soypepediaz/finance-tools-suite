@@ -644,41 +644,27 @@ with tab_backtest:
             except Exception as e:
                 st.error(f"Error en el cálculo: {e}")
 
-# ------------------------------------------------------------------------------
-#  PESTAÑA 3: BACKTEST DINÁMICO (CORREGIDO: NOMBRES DE VARIABLES UNIFICADOS)
-# ------------------------------------------------------------------------------
+# --- PESTAÑA 3: BACKTEST DINÁMICO (SINTAXIS CORREGIDA) ---
 with tab_dynamic_bt:
     st.markdown("### 🔄 Backtest Dinámico: 'Accumulator Mode'")
-    st.info("""
-    **Estrategia de Acumulación de Activos:**
-    1. **Defensa:** Si cae, inyectamos capital para proteger.
-    2. **Moonbag (x2):** Si la posición dobla el riesgo, **retiramos los tokens iniciales** a HODL y reiniciamos con las ganancias.
-    """)
+    st.info("1. **Defensa:** Protege caída. 2. **Moonbag (x2):** Retira capital (tokens) y reinvierte ganancias.")
     
-    col_dyn1, col_dyn2, col_dyn3 = st.columns(3)
-    with col_dyn1:
-        dyn_ticker = st.text_input("Ticker", "BTC-USD", key="dy_t")
-        dyn_capital = st.number_input("Capital Inicial ($)", 10000.0, key="dy_c")
-    with col_dyn2:
-        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*4), key="dy_d")
-        dyn_lev = st.slider("Apalancamiento Objetivo", 1.1, 4.0, 2.0, key="dy_l")
-    with col_dyn3:
-        dyn_th = st.number_input("Umbral Defensa (%)", 15.0, key="dy_th") / 100.0
-        run_dyn = st.button("🚀 Simular Acumulación", type="primary")
+    c1, c2, c3 = st.columns(3)
+    with c1: dt = st.text_input("Ticker", "BTC-USD", key="dy_t"); dc = st.number_input("Capital", 10000.0, key="dy_c")
+    with c2: ds = st.date_input("Inicio", date.today()-timedelta(days=365*4), key="dy_d"); dl = st.slider("Lev Objetivo", 1.1, 4.0, 2.0, key="dy_l")
+    with c3: dth = st.number_input("Umbral %", 15.0, key="dy_th")/100; run_d = st.button("🚀 Simular")
 
-    if run_dyn:
-        with st.spinner("Simulando estrategia de acumulación..."):
+    if run_d:
+        with st.spinner("Calculando..."):
             try:
-                df = yf.download(dyn_ticker, start=dyn_start, progress=False)
+                df = yf.download(dt, start=ds, progress=False)
                 if df.empty: st.error("Sin datos"); st.stop()
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-                # Estado Inicial
-                wallet_usd = dyn_capital
-                accumulated_tokens = 0.0 
-                
-                position = None 
-                hist = []; events = []; total_usd_injected = 0.0
+                wallet_usd = dc
+                accumulated_tokens = 0.0
+                position = None
+                hist = []; events = []; ext_inj = 0.0
                 
                 for d, r in df.iterrows():
                     if pd.isna(r['Close']): continue
@@ -686,131 +672,84 @@ with tab_dynamic_bt:
                     
                     # 1. ABRIR
                     if position is None and wallet_usd > 0:
-                        col = wallet_usd * dyn_lev
+                        col = wallet_usd * dl
                         debt = col - wallet_usd
                         total_amt = col / op
                         own_amt = wallet_usd / op 
                         liq = debt / (total_amt * 0.80)
-                        
-                        # CORRECCIÓN: Usamos 'initial_stack' consistentemente
-                        position = {
-                            "total_amt": total_amt, "debt_usd": debt, "liq": liq,
-                            "initial_stack": own_amt, "risk_base": wallet_usd, "defended": False
-                        }
+                        position = {"total_amt": total_amt, "debt_usd": debt, "liq": liq, "initial_stack": own_amt, "risk_base": wallet_usd}
                         wallet_usd = 0
-                        events.append({
-                            "Fecha": d.date(), "Evento": "🟢 APERTURA", 
-                            "Precio": f"${op:,.0f}", 
-                            "Detalle": f"Stack: {own_amt:.4f}", "Info Extra": f"Deuda: ${debt:,.0f}"
-                        })
+                        events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Precio": f"${op:,.0f}", "Detalle": f"Stack: {own_amt:.4f} BTC", "Info Extra": f"Deuda: ${debt:,.0f}"})
 
                     # 2. GESTIÓN
                     if position:
-                        # A. LIQUIDACIÓN
+                        # A. LIQ
                         if lo <= position["liq"]:
                             position = None; wallet_usd = 0
-                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Pérdida Total", "Info Extra": "-"})
-                        
+                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Detalle": "Rekt", "Info Extra": "-"})
                         else:
-                            # B. MOONBAG (Equity > 2 * Risk Base)
+                            # B. MOONBAG
                             curr_equity = (position["total_amt"] * cl) - position["debt_usd"]
                             val_initial = position["initial_stack"] * cl
                             
                             if position["risk_base"] > 0 and curr_equity >= (val_initial * 2):
-                                
-                                # CORRECCIÓN: Usamos la clave correcta 'initial_stack'
+                                # Corrección de la sintaxis que fallaba antes:
                                 tokens_out = position["initial_stack"]
-                                accumulated_tokens += tokens_out
+                                accumulated_tokens = accumulated_tokens + tokens_out
                                 
                                 remaining_equity = curr_equity - val_initial
                                 wallet_usd = remaining_equity
                                 position = None 
-                                
-                                events.append({
-                                    "Fecha": d.date(), "Evento": "🚀 MOONBAG", 
-                                    "Precio": f"${cl:,.0f}", 
-                                    "Detalle": f"Retirados {tokens_out:.4f} tokens", 
-                                    "Info Extra": f"Reinvierte: ${wallet_usd:,.0f}"
-                                })
+                                events.append({"Fecha": d.date(), "Evento": "🚀 MOONBAG", "Precio": f"${cl:,.0f}", "Detalle": f"Retirados {tokens_out:.4f} BTC", "Info Extra": f"Reinvierte: ${wallet_usd:,.0f}"})
 
                             # C. DEFENSA
-                            elif position and lo <= (position["liq"] * (1 + dyn_th)):
-                                trig = position["liq"] * (1 + dyn_th)
-                                dp = min(op, trig)
-                                nl = dp * 0.80
+                            elif position and lo <= (position["liq"] * (1 + dth)):
+                                trig = position["liq"] * (1 + dth)
+                                dp = min(op, trig); nl = dp * 0.80
                                 needed = position["debt_usd"] / (nl * 0.80)
                                 add = needed - position["total_amt"]
-                                
                                 if add > 0:
                                     cost = add * dp
-                                    total_usd_injected += cost
+                                    ext_inj += cost
                                     position["total_amt"] += add
-                                    position["initial_stack"] += add # Aumenta lo "mío"
-                                    position["risk_base"] += cost # Aumenta riesgo
+                                    position["initial_stack"] += add
+                                    position["risk_base"] += cost
                                     position["liq"] = nl
-                                    position["defended"] = True
-                                    
-                                    events.append({
-                                        "Fecha": d.date(), "Evento": "🛡️ DEFENSA", 
-                                        "Precio": f"${dp:,.0f}", 
-                                        "Detalle": f"Inyección: ${cost:,.0f}", 
-                                        "Info Extra": f"+{add:.4f} tokens"
-                                    })
+                                    events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Precio": f"${dp:,.0f}", "Detalle": f"Inyección: ${cost:,.0f}", "Info Extra": f"+{add:.4f} BTC"})
 
                     # Registro
                     val_hodl = accumulated_tokens * cl
                     val_strat = 0
-                    if position:
-                        val_strat = (position["total_amt"] * cl) - position["debt_usd"]
+                    if position: val_strat = (position["total_amt"] * cl) - position["debt_usd"]
                     
                     total_wealth = val_hodl + val_strat + wallet_usd
-                    total_invested = dyn_capital + total_usd_injected
-                    val_static_hodl = (dyn_capital / df.iloc[0]['Close']) * cl
+                    total_inv = dc + ext_inj
+                    val_static_hodl = (dc / df.iloc[0]['Close']) * cl
                     
-                    hist.append({
-                        "Fecha": d, "Riqueza Total ($)": total_wealth, 
-                        "HODL Pasivo ($)": val_static_hodl, 
-                        "Tokens Acumulados": accumulated_tokens, 
-                        "Inversión Total ($)": total_invested
-                    })
+                    hist.append({"Fecha": d, "Riqueza Total ($)": total_wealth, "HODL Pasivo ($)": val_static_hodl, "Tokens Acumulados": accumulated_tokens, "Inversión Total ($)": total_inv})
 
-                # --- INFORME FINAL ---
                 df_r = pd.DataFrame(hist).set_index("Fecha")
-                final_wealth = df_r.iloc[-1]["Riqueza Total ($)"]
-                final_inv = df_r.iloc[-1]["Inversión Total ($)"]
-                final_hodl_val = df_r.iloc[-1]["HODL Pasivo ($)"]
-                
-                roi = ((final_wealth - final_inv) / final_inv) * 100
+                final_w = df_r.iloc[-1]["Riqueza Total ($)"]
+                final_i = df_r.iloc[-1]["Inversión Total ($)"]
+                final_h = df_r.iloc[-1]["HODL Pasivo ($)"]
+                roi = ((final_w - final_i)/final_i)*100
                 
                 st.divider()
-                st.subheader(f"📊 Informe de Acumulación: {dyn_ticker}")
-                
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Patrimonio Final", f"${final_wealth:,.0f}", delta=f"{roi:.2f}% ROI")
-                m2.metric("Tokens 'Risk Free'", f"{accumulated_tokens:.4f}", help="Tokens retirados a la saca")
-                m3.metric("Vs HODL Pasivo", f"${final_hodl_val:,.0f}", delta=f"${final_wealth - final_hodl_val:,.0f} Diff")
-                m4.metric("Inversión Total", f"${final_inv:,.0f}")
+                m1.metric("Patrimonio Final", f"${final_w:,.0f}", delta=f"{roi:.2f}% ROI")
+                m2.metric("Tokens 'Risk Free'", f"{accumulated_tokens:.4f}")
+                m3.metric("Vs HODL Pasivo", f"${final_h:,.0f}", delta=f"${final_w - final_h:,.0f}")
+                m4.metric("Inversión Total", f"${final_i:,.0f}")
                 
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["Riqueza Total ($)"], name="Estrategia (Acumulación)", line=dict(color="#00CC96", width=2)))
-                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["HODL Pasivo ($)"], name="HODL Pasivo", line=dict(color="gray", dash="dot")))
+                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["Riqueza Total ($)"], name="Estrategia", line=dict(color="#00CC96", width=2)))
+                fig.add_trace(go.Scatter(x=df_r.index, y=df_r["HODL Pasivo ($)"], name="HODL", line=dict(color="gray", dash="dot")))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                with st.expander("📜 Ver Diario de Operaciones", expanded=True):
-                    if events:
-                        st.dataframe(
-                            pd.DataFrame(events), 
-                            use_container_width=True, 
-                            hide_index=True,
-                            column_config={
-                                "Precio": st.column_config.TextColumn("Precio Mercado"),
-                                "Info Extra": st.column_config.TextColumn("Info Adicional")
-                            }
-                        )
-                    else:
-                        st.info("Sin operaciones.")
+                with st.expander("📜 Ver Diario", expanded=True):
+                    if events: st.dataframe(pd.DataFrame(events), use_container_width=True)
+                    else: st.info("Sin operaciones.")
 
-            except Exception as e: st.error(f"Error en simulación: {e}")
+            except Exception as e: st.error(str(e))
 
 # ------------------------------------------------------------------------------
 #  PESTAÑA 4: ESCÁNER REAL (MODO SEGURO + MEMORIA)
