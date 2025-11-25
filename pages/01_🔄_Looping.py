@@ -645,65 +645,69 @@ with tab_backtest:
                 st.error(f"Error en el cálculo: {e}")
 
 # ------------------------------------------------------------------------------
-#  PESTAÑA 3 (NUEVA): BACKTEST DINÁMICO
+#  PESTAÑA 3: BACKTEST DINÁMICO (COSECHA + MOONBAG)
 # ------------------------------------------------------------------------------
 with tab_dynamic_bt:
     st.markdown("### 🔄 Backtest Dinámico: 'Defend & Reset'")
-    
-    # Texto Educativo
-    st.markdown("""
-    ### 📖 ¿En qué consiste la Estrategia?
-    1.  **🛡️ Defensa:** Si el precio cae, inyectamos capital para salvar la posición y promediar entrada.
-    2.  **🔄 Reset (Take Profit):** Si el precio recupera el nivel de entrada, cerramos la posición para capturar el beneficio de la volatilidad.
-    3.  **🚀 Moonbag:** Si el patrimonio neto duplica la inversión inicial (x2), retiramos el riesgo (capital inicial) y seguimos "gratis".
+    st.info("""
+    **Estrategia Combinada:**
+    1. **Defensa:** Inyecta capital si cae.
+    2. **Take Profit (Reset):** Cierra y reabre si recupera precio entrada.
+    3. **Moonbag:** Si el valor neto duplica la inversión inicial (x2), retira el riesgo.
     """)
-    st.divider()
     
-    col_dyn1, col_dyn2, col_dyn3 = st.columns(3)
-    with col_dyn1:
-        dyn_ticker = st.text_input("Ticker", "BTC-USD", key="dyn_t")
-        dyn_capital = st.number_input("Capital Inicial ($)", 10000.0, key="dyn_c")
-    with col_dyn2:
-        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*2), key="dyn_d")
-        dyn_lev = st.slider("Apalancamiento Objetivo", 1.1, 4.0, 2.0, key="dyn_l")
-    with col_dyn3:
-        dyn_th = st.number_input("Umbral Defensa (%)", 15.0, key="dyn_th") / 100.0
-        run_dyn = st.button("🚀 Simular Estrategia Dinámica", type="primary")
+    c1, c2, c3 = st.columns(3)
+    with c1: dt = st.text_input("Ticker", "BTC-USD", key="dy_t"); dc = st.number_input("Capital", 10000.0, key="dy_c")
+    with c2: ds = st.date_input("Inicio", date.today() - timedelta(days=365*2), key="dy_d"); dl = st.slider("Lev Objetivo", 1.1, 4.0, 2.0, key="dy_l")
+    with c3: dth = st.number_input("Umbral %", 15.0, key="dy_th")/100; run_d = st.button("🚀 Simular Dinámico")
 
-    if run_dyn:
+    if run_d:
         with st.spinner("Ejecutando simulación paso a paso..."):
             try:
-                df = yf.download(dyn_ticker, start=dyn_start, progress=False)
+                df = yf.download(dt, start=ds, progress=False)
                 if df.empty: st.error("Sin datos"); st.stop()
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-                # Variables de Estado
-                wallet = dyn_capital        # Dinero en mano
-                invested_net = dyn_capital  # Dinero "mío" arriesgado
-                position = None             # Objeto posición activa
-                moonbag_done = False        # Flag de moonbag
+                wallet = dc
+                invested_net = dc
+                position = None
+                moonbag_done = False
                 
                 hist = []
                 events = []
-                ext_inj = 0.0               # Inyecciones externas totales
+                ext_inj = 0.0
                 
                 for d, r in df.iterrows():
                     if pd.isna(r['Close']): continue
-                    op, lo, hi, cl = float(r['Open']), float(r['Low']), float(r['High']), float(r['Close'])
+                    
+                    op = float(r['Open'])
+                    lo = float(r['Low'])
+                    hi = float(r['High'])
+                    cl = float(r['Close'])
+                    
                     act = "Hold"
                     
-                    # 1. ABRIR POSICIÓN (Si tenemos cash y no hay posición)
-                    if position is None and wallet > 0:
-                        col = wallet * dyn_lev
-                        debt = col - wallet
-                        amt = col / op
-                        liq = debt / (amt * 0.80) # LTV 80%
-                        position = {"amt": amt, "debt": debt, "liq": liq, "ent": op, "def": False}
-                        wallet = 0
-                        act = "OPEN"
-                        events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Precio": f"${op:,.0f}", "Impacto": "-"})
+                    # 1. ABRIR POSICIÓN
+                    if position is None:
+                        if wallet > 0:
+                            col = wallet * dl
+                            debt = col - wallet
+                            amt = col / op
+                            liq = debt / (amt * 0.80) # LTV 80%
+                            
+                            # AQUÍ ESTABA EL ERROR: Usar nombre completo 'defended'
+                            position = {
+                                "amt": amt, 
+                                "debt": debt, 
+                                "liq": liq, 
+                                "ent": op, 
+                                "defended": False 
+                            }
+                            wallet = 0
+                            act = "OPEN"
+                            events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Precio": f"${op:,.0f}", "Impacto": "-"})
                     
-                    # 2. GESTIÓN DE POSICIÓN ACTIVA
+                    # 2. GESTIÓN
                     if position:
                         # A. Check Liquidación
                         if lo <= position["liq"]:
@@ -721,7 +725,7 @@ with tab_dynamic_bt:
                                 events.append({"Fecha": d.date(), "Evento": "🚀 MOONBAG (x2)", "Precio": f"${cl:,.0f}", "Impacto": "Retiro de Riesgo"})
 
                             # C. Check Defensa
-                            trig = position["liq"] * (1 + dyn_th)
+                            trig = position["liq"] * (1 + dth)
                             if lo <= trig:
                                 dp = min(op, trig)
                                 nl = dp * 0.80
@@ -734,11 +738,11 @@ with tab_dynamic_bt:
                                         invested_net += cost
                                     position["amt"] += add
                                     position["liq"] = nl
-                                    position["def"] = True
+                                    position["defended"] = True # Corregido
                                     act = "DEFENDED"
                                     events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Precio": f"${dp:,.0f}", "Impacto": f"Inyección: ${cost:,.0f}"})
                             
-                            # D. Check Reset (Solo si hubo defensa previa y recupera entrada)
+                            # D. Check Reset (Solo si hubo defensa previa)
                             if position["defended"] and hi >= position["ent"]:
                                 ep = position["ent"]
                                 gross = position["amt"] * ep
@@ -753,25 +757,20 @@ with tab_dynamic_bt:
                     if position:
                         eq_val += (position["amt"] * cl) - position["debt"]
                     
-                    # Adjusted Equity (Restando lo que hemos metido extra)
-                    real_roi_base = invested_net if invested_net > 0 else dyn_capital
-                    
                     hist.append({
                         "Fecha": d, 
-                        "Equity Bruto": eq_val, 
                         "Equity Neto": eq_val - ext_inj,
                         "Inversión Total": invested_net
                     })
 
                 df_r = pd.DataFrame(hist).set_index("Fecha")
                 final_net = df_r.iloc[-1]["Equity Neto"]
-                roi = ((final_net - dyn_capital) / dyn_capital) * 100
+                roi = ((final_net - dc) / dc) * 100
                 
-                # --- INFORME DINÁMICO ---
+                # --- INFORME DINÁMICO (RESTAURADO) ---
                 st.divider()
-                st.subheader(f"📊 Informe de Resultados: {dyn_ticker}")
+                st.subheader(f"📊 Informe de Resultados: {dt}")
                 
-                # Métricas principales
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Capital Final (Neto)", f"${final_net:,.0f}", delta=f"{roi:.2f}% ROI")
                 m2.metric("Dinero Extra Inyectado", f"${ext_inj:,.0f}")
@@ -790,6 +789,7 @@ with tab_dynamic_bt:
                         st.info("No hubo eventos (HODL tranquilo).")
                     
             except Exception as e: st.error(f"Error en simulación: {e}")
+
 # ------------------------------------------------------------------------------
 #  PESTAÑA 4: ESCÁNER REAL (MODO SEGURO + MEMORIA)
 # ------------------------------------------------------------------------------
