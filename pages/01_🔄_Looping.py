@@ -713,12 +713,12 @@ with tab_dynamic_bt:
                                     cost = add * dp
                                     ext_inj += cost
                                     if not moonbag_done: invested_net += cost
-                                    position["amt"] += add; position["liq"] = nl; position["def"] = True; act = "DEFENDED"
+                                    position["amt"] += add; position["liq"] = nl; position["def"] = True; act = "def"
                                     events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Precio": f"${dp:,.0f}", "Detalle": f"Inyección: ${cost:,.0f}"})
                             
                             # D. Check Reset (Cierre y Reapertura si recupera entrada)
                             # Solo si hubo defensa previa
-                            if position["defended"] and hi >= position["ent"]:
+                            if position["def"] and hi >= position["ent"]:
                                 ep = position["ent"]
                                 gross = position["amt"] * ep
                                 net = gross - position["debt"]
