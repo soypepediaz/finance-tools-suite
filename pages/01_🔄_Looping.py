@@ -644,90 +644,154 @@ with tab_backtest:
             except Exception as e:
                 st.error(f"Error en el cálculo: {e}")
 
-# --- PESTAÑA 4 (NUEVA): BACKTEST DINÁMICO ---
+# ------------------------------------------------------------------------------
+#  PESTAÑA 3 (NUEVA): BACKTEST DINÁMICO
+# ------------------------------------------------------------------------------
 with tab_dynamic_bt:
     st.markdown("### 🔄 Backtest Dinámico: 'Defend & Reset'")
-    st.info("Estrategia: Entrar -> Defender si cae -> Cerrar y Reiniciar si recupera el precio de entrada.")
     
-    c1, c2, c3 = st.columns(3)
-    with c1: dt = st.text_input("Ticker", "BTC-USD", key="dt"); dc = st.number_input("Capital", 10000.0, key="dc")
-    with c2: ds = st.date_input("Inicio", date.today()-timedelta(days=365*2), key="ds"); dl = st.slider("Lev Objetivo", 1.1, 4.0, 2.0, key="dl")
-    with c3: dth = st.number_input("Umbral %", 15.0, key="dth")/100; run_d = st.button("🚀 Simular")
+    # Texto Educativo
+    st.markdown("""
+    ### 📖 ¿En qué consiste la Estrategia?
+    1.  **🛡️ Defensa:** Si el precio cae, inyectamos capital para salvar la posición y promediar entrada.
+    2.  **🔄 Reset (Take Profit):** Si el precio recupera el nivel de entrada, cerramos la posición para capturar el beneficio de la volatilidad.
+    3.  **🚀 Moonbag:** Si el patrimonio neto duplica la inversión inicial (x2), retiramos el riesgo (capital inicial) y seguimos "gratis".
+    """)
+    st.divider()
+    
+    col_dyn1, col_dyn2, col_dyn3 = st.columns(3)
+    with col_dyn1:
+        dyn_ticker = st.text_input("Ticker", "BTC-USD", key="dyn_t")
+        dyn_capital = st.number_input("Capital Inicial ($)", 10000.0, key="dyn_c")
+    with col_dyn2:
+        dyn_start = st.date_input("Inicio", date.today() - timedelta(days=365*2), key="dyn_d")
+        dyn_lev = st.slider("Apalancamiento Objetivo", 1.1, 4.0, 2.0, key="dyn_l")
+    with col_dyn3:
+        dyn_th = st.number_input("Umbral Defensa (%)", 15.0, key="dyn_th") / 100.0
+        run_dyn = st.button("🚀 Simular Estrategia Dinámica", type="primary")
 
-    if run_d:
-        with st.spinner("Calculando..."):
+    if run_dyn:
+        with st.spinner("Ejecutando simulación paso a paso..."):
             try:
-                df = yf.download(dt, start=ds, progress=False)
+                df = yf.download(dyn_ticker, start=dyn_start, progress=False)
                 if df.empty: st.error("Sin datos"); st.stop()
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-                wallet = dc; pos = None; hist = []; events = []; ext_inj = 0.0
+                # Variables de Estado
+                wallet = dyn_capital        # Dinero en mano
+                invested_net = dyn_capital  # Dinero "mío" arriesgado
+                position = None             # Objeto posición activa
+                moonbag_done = False        # Flag de moonbag
+                
+                hist = []
+                events = []
+                ext_inj = 0.0               # Inyecciones externas totales
                 
                 for d, r in df.iterrows():
                     if pd.isna(r['Close']): continue
                     op, lo, hi, cl = float(r['Open']), float(r['Low']), float(r['High']), float(r['Close'])
                     act = "Hold"
                     
-                    # 1. ABRIR
-                    if pos is None:
-                        if wallet > 0:
-                            col = wallet * dl; debt = col - wallet; amt = col / op; liq = debt / (amt * 0.80)
-                            pos = {"amt": amt, "debt": debt, "liq": liq, "ent": op, "def": False}
-                            wallet = 0; act = "OPEN"; events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Detalle": f"${op:,.0f}", "Impacto": "-"})
+                    # 1. ABRIR POSICIÓN (Si tenemos cash y no hay posición)
+                    if position is None and wallet > 0:
+                        col = wallet * dyn_lev
+                        debt = col - wallet
+                        amt = col / op
+                        liq = debt / (amt * 0.80) # LTV 80%
+                        position = {"amt": amt, "debt": debt, "liq": liq, "ent": op, "def": False}
+                        wallet = 0
+                        act = "OPEN"
+                        events.append({"Fecha": d.date(), "Evento": "🟢 APERTURA", "Precio": f"${op:,.0f}", "Impacto": "-"})
                     
-                    # 2. GESTIÓN
-                    if pos:
-                        if lo <= pos["liq"]: # REKT
-                            pos = None; wallet = 0; act = "LIQUIDATED"; events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Detalle": f"Muerte a ${pos['liq']:,.0f}", "Impacto": "-100%"})
+                    # 2. GESTIÓN DE POSICIÓN ACTIVA
+                    if position:
+                        # A. Check Liquidación
+                        if lo <= position["liq"]:
+                            position = None
+                            wallet = 0
+                            act = "LIQUIDATED"
+                            events.append({"Fecha": d.date(), "Evento": "💀 LIQUIDACIÓN", "Precio": f"${lo:,.0f}", "Impacto": "Pérdida Total"})
+                        
                         else:
-                            trig = pos["liq"] * (1 + dth)
-                            if lo <= trig: # DEFEND
-                                dp = min(op, trig); nl = dp * 0.80; na = pos["debt"] / (nl * 0.80); add = na - pos["amt"]
-                                if add > 0:
-                                    cost = add * dp; ext_inj += cost
-                                    pos["amt"] += add; pos["liq"] = nl; pos["def"] = True; act = "DEFENDED"
-                                    events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Detalle": f"Precio ${dp:,.0f}", "Impacto": f"-${cost:,.0f}"})
-                            
-                            if pos["def"] and hi >= pos["ent"]: # RESET
-                                ep = pos["ent"]; gross = pos["amt"] * ep; net = gross - pos["debt"]
-                                wallet = net; pos = None; act = "RESET"
-                                events.append({"Fecha": d.date(), "Evento": "💰 TAKE PROFIT", "Detalle": f"Salida a ${ep:,.0f}", "Impacto": f"Recuperado: ${net:,.0f}"})
+                            # B. Check Moonbag (x2 Equity)
+                            curr_eq = (position["amt"] * cl) - position["debt"]
+                            if not moonbag_done and curr_eq >= (invested_net * 2):
+                                moonbag_done = True
+                                act = "MOONBAG 🚀"
+                                events.append({"Fecha": d.date(), "Evento": "🚀 MOONBAG (x2)", "Precio": f"${cl:,.0f}", "Impacto": "Retiro de Riesgo"})
 
-                    # Registro
-                    eq = wallet
-                    if pos: eq += (pos["amt"] * cl) - pos["debt"]
-                    hist.append({"Fecha": d, "Equity": eq - ext_inj})
+                            # C. Check Defensa
+                            trig = position["liq"] * (1 + dyn_th)
+                            if lo <= trig:
+                                dp = min(op, trig)
+                                nl = dp * 0.80
+                                na = position["debt"] / (nl * 0.80)
+                                add = na - position["amt"]
+                                if add > 0:
+                                    cost = add * dp
+                                    ext_inj += cost
+                                    if not moonbag_done: 
+                                        invested_net += cost
+                                    position["amt"] += add
+                                    position["liq"] = nl
+                                    position["def"] = True
+                                    act = "DEFENDED"
+                                    events.append({"Fecha": d.date(), "Evento": "🛡️ DEFENSA", "Precio": f"${dp:,.0f}", "Impacto": f"Inyección: ${cost:,.0f}"})
+                            
+                            # D. Check Reset (Solo si hubo defensa previa y recupera entrada)
+                            if position["defended"] and hi >= position["ent"]:
+                                ep = position["ent"]
+                                gross = position["amt"] * ep
+                                net = gross - position["debt"]
+                                wallet = net
+                                position = None
+                                act = "RESET"
+                                events.append({"Fecha": d.date(), "Evento": "💰 TAKE PROFIT", "Precio": f"${ep:,.0f}", "Impacto": f"Cash: ${net:,.0f}"})
+
+                    # Registro Diario
+                    eq_val = wallet
+                    if position:
+                        eq_val += (position["amt"] * cl) - position["debt"]
+                    
+                    # Adjusted Equity (Restando lo que hemos metido extra)
+                    real_roi_base = invested_net if invested_net > 0 else dyn_capital
+                    
+                    hist.append({
+                        "Fecha": d, 
+                        "Equity Bruto": eq_val, 
+                        "Equity Neto": eq_val - ext_inj,
+                        "Inversión Total": invested_net
+                    })
 
                 df_r = pd.DataFrame(hist).set_index("Fecha")
-                feq = df_r.iloc[-1]["Equity"]; roi = ((feq - dc)/dc)*100
+                final_net = df_r.iloc[-1]["Equity Neto"]
+                roi = ((final_net - dyn_capital) / dyn_capital) * 100
                 
+                # --- INFORME DINÁMICO ---
+                st.divider()
+                st.subheader(f"📊 Informe de Resultados: {dyn_ticker}")
+                
+                # Métricas principales
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Capital Final (Neto)", f"${feq:,.0f}", delta=f"{roi:.2f}%")
+                m1.metric("Capital Final (Neto)", f"${final_net:,.0f}", delta=f"{roi:.2f}% ROI")
                 m2.metric("Dinero Extra Inyectado", f"${ext_inj:,.0f}")
-                m3.metric("Eventos Totales", len(events))
+                m3.metric("Total Operaciones", len(events))
                 
-                st.line_chart(df_r["Equity"])
+                st.line_chart(df_r["Equity Neto"])
                 
-                with st.expander("📜 Ver Diario de Operaciones (Visual)"):
-                    # Crear DataFrame de Eventos para visualización bonita
+                with st.expander("📜 Ver Diario de Operaciones Completo", expanded=True):
                     if events:
-                        df_ev = pd.DataFrame(events)
                         st.dataframe(
-                            df_ev,
-                            column_config={
-                                "Evento": st.column_config.TextColumn("Acción", help="Tipo de operación"),
-                                "Impacto": st.column_config.TextColumn("Impacto Monetario", help="Coste o Retorno"),
-                            },
+                            pd.DataFrame(events),
                             use_container_width=True,
                             hide_index=True
                         )
                     else:
-                        st.info("No hubo eventos relevantes en este periodo.")
-
-            except Exception as e: st.error(f"Error: {e}")
-
+                        st.info("No hubo eventos (HODL tranquilo).")
+                    
+            except Exception as e: st.error(f"Error en simulación: {e}")
 # ------------------------------------------------------------------------------
-#  PESTAÑA 3: ESCÁNER REAL (MODO SEGURO + MEMORIA)
+#  PESTAÑA 4: ESCÁNER REAL (MODO SEGURO + MEMORIA)
 # ------------------------------------------------------------------------------
 with tab_onchain:
     st.markdown("### 📡 Escáner Aave V3 (Modo Seguro)")
