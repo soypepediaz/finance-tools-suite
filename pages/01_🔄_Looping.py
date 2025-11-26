@@ -705,7 +705,7 @@ with tab_home:
                     else:
                         st.warning("Por favor, introduce un email válido.")
     
-    st.caption("Desarrollado con ❤️ por Campamento DeFi. DYOR.")
+ 
 
 # ------------------------------------------------------------------------------
 #  PESTAÑA 1: CALCULADORA ESTÁTICA (MEJORADA)
@@ -1428,3 +1428,17 @@ with tab_onchain:
                     )
         else:
             st.success("Sin deuda activa.")
+
+# ==============================================================================
+#  GLOBAL FOOTER (Pie de página común para todas las pestañas)
+# ==============================================================================
+st.divider()
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+        Desarrollado con ❤️ por <a href='https://lab.campamentodefi.com' target='_blank' style='text-decoration: none; color: #FF4B4B;'>Campamento DeFi</a>, 
+        el lugar de reunión de los seres <a href='https://link.soypepediaz.com/labinconfiscable' target='_blank' style='text-decoration: none; color: #FF4B4B;'>Inconfiscables</a>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
