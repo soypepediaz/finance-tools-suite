@@ -341,82 +341,80 @@ with tab2:
         k2.metric("Dinámica (Final)", f"${val_dyn:,.0f}", f"{val_dyn-capital_inicial:+.0f} $")
         k3.metric("Diferencia", f"${val_dyn-val_st:,.0f}", delta_color="normal")
         
-# ... (El código anterior sigue igual) ...
+        # 4. GRÁFICO EVOLUCIÓN (MODIFICADO PARA MOSTRAR RANGOS Y AMPLITUD)
+        st.subheader("Visualización de Estrategias")
+        fig_back = go.Figure()
                     
-                    # 4. GRÁFICO EVOLUCIÓN (MODIFICADO PARA MOSTRAR RANGOS Y AMPLITUD)
-                    st.subheader("Visualización de Estrategias")
-                    fig_back = go.Figure()
+        # A. Rango Dinámico (Banda Azul)
+        fig_back.add_trace(go.Scatter(
+        x=fechas_real, y=h_low, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
+        ))
+        fig_back.add_trace(go.Scatter(
+        x=fechas_real, y=h_up, mode='lines', line=dict(width=0), 
+        fill='tonexty', fillcolor='rgba(0, 100, 255, 0.2)',
+        name='Rango Dinámico'
+        ))
                     
-                    # A. Rango Dinámico (Banda Azul)
-                    fig_back.add_trace(go.Scatter(
-                        x=fechas_real, y=h_low, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
-                    ))
-                    fig_back.add_trace(go.Scatter(
-                        x=fechas_real, y=h_up, mode='lines', line=dict(width=0), 
-                        fill='tonexty', fillcolor='rgba(0, 100, 255, 0.2)',
-                        name='Rango Dinámico'
-                    ))
+        # B. Precio Activo (Línea Negra)
+        fig_back.add_trace(go.Scatter(
+        x=fechas_real, y=data['Close'], mode='lines', 
+        name='Precio BTC', 
+        line=dict(color='black', width=1.5)
+        ))
                     
-                    # B. Precio Activo (Línea Negra)
-                    fig_back.add_trace(go.Scatter(
-                        x=fechas_real, y=data['Close'], mode='lines', 
-                        name='Precio BTC', 
-                        line=dict(color='black', width=1.5)
-                    ))
+        # C. Rango Estático (Cálculo de Datos y Etiquetas)
+        p_start = precios_real[0][0]
+        r_sup = p_start + (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
+        r_inf = p_start - (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
                     
-                    # C. Rango Estático (Cálculo de Datos y Etiquetas)
-                    p_start = precios_real[0][0]
-                    r_sup = p_start + (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
-                    r_inf = p_start - (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
+        # Calculamos porcentajes para mostrar
+        pct_sup = ((r_sup - p_start) / p_start) * 100
+        pct_inf = ((r_inf - p_start) / p_start) * 100 # Saldrá negativo
+        amplitud_total_pct = pct_sup - pct_inf
                     
-                    # Calculamos porcentajes para mostrar
-                    pct_sup = ((r_sup - p_start) / p_start) * 100
-                    pct_inf = ((r_inf - p_start) / p_start) * 100 # Saldrá negativo
-                    amplitud_total_pct = pct_sup - pct_inf
+        # Línea Superior con Precio y %
+        fig_back.add_hline(
+        y=r_sup, 
+        line_dash="dash", line_color="#2ecc71", 
+        annotation_text=f"Sup: ${r_sup:,.0f} (+{pct_sup:.1f}%)", 
+        annotation_position="top right",
+        annotation_font_color="green"
+        )
+        # Línea Inferior con Precio y %
+        fig_back.add_hline(
+        y=r_inf, 
+        line_dash="dash", line_color="#2ecc71", 
+        annotation_text=f"Inf: ${r_inf:,.0f} ({pct_inf:.1f}%)", 
+        annotation_position="bottom right",
+        annotation_font_color="green"
+        )
                     
-                    # Línea Superior con Precio y %
-                    fig_back.add_hline(
-                        y=r_sup, 
-                        line_dash="dash", line_color="#2ecc71", 
-                        annotation_text=f"Sup: ${r_sup:,.0f} (+{pct_sup:.1f}%)", 
-                        annotation_position="top right",
-                        annotation_font_color="green"
-                    )
-                    # Línea Inferior con Precio y %
-                    fig_back.add_hline(
-                        y=r_inf, 
-                        line_dash="dash", line_color="#2ecc71", 
-                        annotation_text=f"Inf: ${r_inf:,.0f} ({pct_inf:.1f}%)", 
-                        annotation_position="bottom right",
-                        annotation_font_color="green"
-                    )
+        # D. Etiqueta Flotante con Resumen del Rango Estático
+        fig_back.add_annotation(
+        xref="paper", yref="paper",
+        x=0.01, y=0.99, # Posición esquina superior izquierda
+        text=f"<b>INFO RANGO ESTÁTICO</b><br>Precio Inicial: ${p_start:,.0f}<br>Amplitud Total: <b>{amplitud_total_pct:.1f}%</b>",
+        showarrow=False,
+        bgcolor="rgba(255, 255, 255, 0.8)",
+        bordercolor="#2ecc71",
+        borderwidth=1,
+        font=dict(size=12, color="black"),
+        align="left"
+        )
                     
-                    # D. Etiqueta Flotante con Resumen del Rango Estático
-                    fig_back.add_annotation(
-                        xref="paper", yref="paper",
-                        x=0.01, y=0.99, # Posición esquina superior izquierda
-                        text=f"<b>INFO RANGO ESTÁTICO</b><br>Precio Inicial: ${p_start:,.0f}<br>Amplitud Total: <b>{amplitud_total_pct:.1f}%</b>",
-                        showarrow=False,
-                        bgcolor="rgba(255, 255, 255, 0.8)",
-                        bordercolor="#2ecc71",
-                        borderwidth=1,
-                        font=dict(size=12, color="black"),
-                        align="left"
-                    )
-                    
-                    # E. Marcadores de Rebalanceo (Igual que antes)
-                    if len(log_ops) > 0:
-                        df_log_events = pd.DataFrame(log_ops)
-                        df_log_events = df_log_events[df_log_events["Evento"].str.contains("Ruptura")]
-                        if not df_log_events.empty:
-                            f_ev = [data.index[i] for i in df_log_events['Día Índice']]
-                            p_ev = df_log_events['Precio Ejecución'].values 
-                            fig_back.add_trace(go.Scatter(x=f_ev, y=p_ev, mode='markers', marker=dict(color='red', size=8, symbol='x'), name='Rebalanceo'))
+        # E. Marcadores de Rebalanceo (Igual que antes)
+        if len(log_ops) > 0:
+        df_log_events = pd.DataFrame(log_ops)
+        df_log_events = df_log_events[df_log_events["Evento"].str.contains("Ruptura")]
+        if not df_log_events.empty:
+        f_ev = [data.index[i] for i in df_log_events['Día Índice']]
+        p_ev = df_log_events['Precio Ejecución'].values 
+        fig_back.add_trace(go.Scatter(x=f_ev, y=p_ev, mode='markers', marker=dict(color='red', size=8, symbol='x'), name='Rebalanceo'))
 
-                    fig_back.update_layout(template="plotly_white", height=500, title=f"Historia {ticker} vs Rangos")
-                    st.plotly_chart(fig_back, use_container_width=True)
+        fig_back.update_layout(template="plotly_white", height=500, title=f"Historia {ticker} vs Rangos")
+        st.plotly_chart(fig_back, use_container_width=True)
                     
-                    # ... (El código siguiente de la Tabla sigue igual) ...
+        # ... (El código siguiente de la Tabla sigue igual) ...
         
         # Auditoría con Selectores (SIN REINICIAR)
         st.subheader("📋 Auditoría de Operaciones")
