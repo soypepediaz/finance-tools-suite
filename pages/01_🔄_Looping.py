@@ -409,6 +409,7 @@ def simulacion_seccion():
     deuda_remanente_token = deuda_total_actual_token 
     
     dinero_en_wallet_usado = 0.0
+    qty_added_sec2 = 0.0 # [NUEVO] Variable para registrar aportación de tokens extra
     
     # Variables para calcular nuevos precios de liquidación tras la acción
     nuevo_liq_price = precio_liquidacion
@@ -457,6 +458,7 @@ def simulacion_seccion():
 
             # Actualizar el colateral remanente
             colateral_remanente_qty += qty_added_to_collateral
+            qty_added_sec2 = qty_added_to_collateral # [NUEVO] Guardamos la cantidad añadida
             
             if msg_conversion:
                 st.success(msg_conversion)
@@ -608,7 +610,12 @@ def simulacion_seccion():
 
         if "Largo" in tipo_posicion and precio_final > 0:
             resultado_en_tokens = resultado_total_usd / precio_final
-            st.write(f"Resultado medido en tokens: **{resultado_en_tokens:.4f} {lbl_colateral}**")
+            
+            # [NUEVO] Cálculo de ROI en Tokens (Ganancia Tokens / (Tokens Iniciales + Tokens Añadidos))
+            base_tokens_total = colateral_base_qty + qty_added_sec2
+            roi_tokens_pct = (resultado_en_tokens / base_tokens_total) * 100 if base_tokens_total > 0 else 0
+            
+            st.write(f"Resultado medido en tokens: **{resultado_en_tokens:.4f} {lbl_colateral}** ({roi_tokens_pct:+.2f}%)")
 
 
 # ==============================================================================
