@@ -840,7 +840,7 @@ def simulacion_seccion():
     col_res_int1, col_res_int2, col_res_int3 = st.columns(3)
     col_res_int1.metric("Intereses Generados (USD)", f"-${interes_generado_usd:,.2f}")
     col_res_int2.metric("Valor Neto Actual (Equity)", f"${equity_actual_usd:,.2f}")
-    col_res_int3.metric("PnL Latente (Si cierras hoy)", f"${pnl_usd:,.2f} ({pnl_pct:.2f}%)", delta_color="normal")
+    col_res_int3.metric("PnL Latente (Si cierras íntegramente hoy)", f"${pnl_usd:,.2f} ({pnl_pct:.2f}%)", delta_color="normal")
 
     # Lógica de cierre / repago
     st.markdown("**Acciones sobre la posición**")
