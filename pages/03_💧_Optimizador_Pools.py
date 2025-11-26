@@ -48,25 +48,17 @@ def generar_montecarlo_precios(precio, vol, tendencia, dias, n_sims):
     return precios
 
 def calcular_valor_v3_exacto(cap_entrada, p_entry, p_exit, p_min, p_max):
-    """
-    Calcula el valor de salida.
-    IMPORTANTE: Si p_exit toca p_max o p_min, asumimos conversión total 
-    al precio exacto del límite (ejecución perfecta teórica).
-    """
+    """Calcula el valor de salida asumiendo venta progresiva."""
     if p_exit >= p_max: 
-        # Salida por arriba: Todo convertido a Stable al precio promedio de ese rango
         precio_promedio = np.sqrt(p_entry * p_max)
         stables_originales = cap_entrada * 0.5
         valor_venta_tokens = (cap_entrada * 0.5 / p_entry) * precio_promedio
         return stables_originales + valor_venta_tokens
     elif p_exit <= p_min:
-        # Salida por abajo: Todo convertido a Token al precio promedio de ese rango
         precio_promedio = np.sqrt(p_entry * p_min)
         tokens_originales = (cap_entrada * 0.5 / p_entry)
         tokens_comprados = (cap_entrada * 0.5) / precio_promedio
         return (tokens_originales + tokens_comprados) * p_exit
-    
-    # Si sigue dentro, valor nominal aproximado (simplificado para velocidad)
     return cap_entrada
 
 def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st, pct_dyn, gas, fee_swap, vol_anual, window_days):
@@ -141,21 +133,19 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
             else:
                 num_rebalanceos += 1
                 
-                # --- CORRECCIÓN: USAR PRECIO LÍMITE EXACTO ---
+                # --- RUPTURA ---
                 if p_hoy > p_max_dyn:
                     evento = "Ruptura Superior ⬆️"
-                    p_ejecucion = p_max_dyn # Ejecutamos exactamente en el límite superior
+                    p_ejecucion = p_max_dyn 
                 else:
                     evento = "Ruptura Inferior ⬇️"
-                    p_ejecucion = p_min_dyn # Ejecutamos exactamente en el límite inferior
+                    p_ejecucion = p_min_dyn 
                 
                 rango_previo_str = f"{p_min_dyn:.2f} - {p_max_dyn:.2f}"
                 
-                # Usamos p_ejecucion para calcular el valor de salida exacto
                 p_ref_anterior = (p_max_dyn + p_min_dyn) / 2
                 val_salida_pool = calcular_valor_v3_exacto(cap_dyn, p_ref_anterior, p_ejecucion, p_min_dyn, p_max_dyn)
                 
-                # Usamos p_ejecucion para calcular el IL (Hold vs Pool al precio de ruptura)
                 val_hold = (cap_dyn * 0.5) + ((cap_dyn * 0.5 / p_ref_anterior) * p_ejecucion)
                 il_realizado = max(0, val_hold - val_salida_pool)
                 
@@ -169,8 +159,7 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                         "Operación": num_rebalanceos,
                         "Día Índice": dia,
                         "Rango Activo": rango_previo_str,
-                        "Precio Ejecución": p_ejecucion, # Ahora mostramos el límite, no el cierre
-                        "Precio Cierre Día": p_hoy, # Guardamos informativo
+                        "Precio Ejecución": p_ejecucion,
                         "Evento": evento,
                         "Fees Generados": fees_acumulados_operacion,
                         "Pérdida IL (Info)": il_realizado,
@@ -180,7 +169,7 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                 
                 cap_dyn = cap_nuevo
                 fees_acumulados_operacion = 0
-                nuevo_delta = p_hoy * ratio_width # El nuevo rango se centra en el precio real de mercado (p_hoy), no el límite
+                nuevo_delta = p_hoy * ratio_width
                 p_min_dyn = p_hoy - nuevo_delta
                 p_max_dyn = p_hoy + nuevo_delta
 
@@ -197,7 +186,6 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                 "Día Índice": filas - 1,
                 "Rango Activo": f"{p_min_dyn:.2f} - {p_max_dyn:.2f}",
                 "Precio Ejecución": p_cierre,
-                "Precio Cierre Día": p_cierre,
                 "Evento": "Cierre Fin Periodo 🏁",
                 "Fees Generados": fees_acumulados_operacion,
                 "Pérdida IL (Info)": il_latente,
@@ -239,17 +227,20 @@ with tab1:
     if st.button("🚀 Ejecutar Montecarlo"):
         matriz = generar_montecarlo_precios(precio_actual, volatilidad_anual, tendencia_anual, dias_analisis, n_simulaciones)
         
+        # Ejecutamos
         res_st, res_dyn, log_ops, log_st, h_up, h_low, dias_in_st, delta_viz = ejecutar_analisis_operaciones(
             matriz, capital_inicial, apr_base_estatica, std_estatica, pct_ancho_dinamico, 
             gas_rebalanceo, swap_fee, volatilidad_anual, bb_window
         )
         
+        # Resultados
         m_st, m_dyn = np.mean(res_st), np.mean(res_dyn)
         c1, c2, c3 = st.columns(3)
         c1.metric("Estática (Media)", f"${m_st:,.0f}", f"{m_st-capital_inicial:+.0f} $")
         c2.metric("Dinámica (Media)", f"${m_dyn:,.0f}", f"{m_dyn-capital_inicial:+.0f} $")
         c3.metric("Diferencia", f"${m_dyn-m_st:,.0f}", delta_color="normal")
         
+        # Gráfico Cono
         p10, p50, p90 = np.percentile(matriz, 10, axis=1), np.percentile(matriz, 50, axis=1), np.percentile(matriz, 90, axis=1)
         x = np.arange(len(p50))
         fig = go.Figure()
@@ -260,14 +251,16 @@ with tab1:
         fig.update_layout(template="plotly_dark", height=350, margin=dict(t=10,b=10))
         st.plotly_chart(fig, use_container_width=True)
 
+        # Histograma
         fig2 = go.Figure()
         fig2.add_trace(go.Histogram(x=res_st, name='Estática', marker_color='#2ecc71', opacity=0.7))
         fig2.add_trace(go.Histogram(x=res_dyn, name='Dinámica', marker_color='#e74c3c', opacity=0.7))
         fig2.update_layout(template="plotly_dark", height=300, margin=dict(t=10,b=10), barmode='overlay')
         st.plotly_chart(fig2, use_container_width=True)
 
+
 # ==========================================
-# PESTAÑA 2: BACKTESTING (CORREGIDO SESIONES)
+# PESTAÑA 2: BACKTESTING
 # ==========================================
 with tab2:
     st.header("Validación con Datos Reales")
@@ -341,82 +334,57 @@ with tab2:
         k2.metric("Dinámica (Final)", f"${val_dyn:,.0f}", f"{val_dyn-capital_inicial:+.0f} $")
         k3.metric("Diferencia", f"${val_dyn-val_st:,.0f}", delta_color="normal")
         
-        # 4. GRÁFICO EVOLUCIÓN (MODIFICADO PARA MOSTRAR RANGOS Y AMPLITUD)
+        # --- GRÁFICO (CON ANOTACIONES DE AMPLITUD) ---
         st.subheader("Visualización de Estrategias")
         fig_back = go.Figure()
-                    
-        # A. Rango Dinámico (Banda Azul)
-        fig_back.add_trace(go.Scatter(
-        x=fechas_real, y=h_low, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
-        ))
-        fig_back.add_trace(go.Scatter(
-        x=fechas_real, y=h_up, mode='lines', line=dict(width=0), 
-        fill='tonexty', fillcolor='rgba(0, 100, 255, 0.2)',
-        name='Rango Dinámico'
-        ))
-                    
-        # B. Precio Activo (Línea Negra)
-        fig_back.add_trace(go.Scatter(
-        x=fechas_real, y=data['Close'], mode='lines', 
-        name='Precio BTC', 
-        line=dict(color='black', width=1.5)
-        ))
-                    
-        # C. Rango Estático (Cálculo de Datos y Etiquetas)
-        p_start = precios_real[0][0]
+        
+        # Dinámica
+        fig_back.add_trace(go.Scatter(x=data.index, y=h_low, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
+        fig_back.add_trace(go.Scatter(x=data.index, y=h_up, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 100, 255, 0.2)', name='Rango Dinámico'))
+        
+        # Precio (Negro)
+        fig_back.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Precio BTC', line=dict(color='black', width=1.5))) 
+        
+        # Estática (Calculada con datos)
+        p_start = data['Close'].iloc[0]
         r_sup = p_start + (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
         r_inf = p_start - (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
-                    
-        # Calculamos porcentajes para mostrar
+        
+        # Cálculos de Amplitud para Visualización
         pct_sup = ((r_sup - p_start) / p_start) * 100
-        pct_inf = ((r_inf - p_start) / p_start) * 100 # Saldrá negativo
-        amplitud_total_pct = pct_sup - pct_inf
-                    
-        # Línea Superior con Precio y %
+        pct_inf = ((r_inf - p_start) / p_start) * 100
+        amplitud_total = pct_sup - pct_inf
+
+        # Líneas y Etiquetas del Gráfico
         fig_back.add_hline(
-        y=r_sup, 
-        line_dash="dash", line_color="#2ecc71", 
-        annotation_text=f"Sup: ${r_sup:,.0f} (+{pct_sup:.1f}%)", 
-        annotation_position="top right",
-        annotation_font_color="green"
+            y=r_sup, line_dash="dash", line_color="#2ecc71",
+            annotation_text=f"Sup: ${r_sup:,.0f} (+{pct_sup:.1f}%)", annotation_position="top right", annotation_font_color="green"
         )
-        # Línea Inferior con Precio y %
         fig_back.add_hline(
-        y=r_inf, 
-        line_dash="dash", line_color="#2ecc71", 
-        annotation_text=f"Inf: ${r_inf:,.0f} ({pct_inf:.1f}%)", 
-        annotation_position="bottom right",
-        annotation_font_color="green"
+            y=r_inf, line_dash="dash", line_color="#2ecc71",
+            annotation_text=f"Inf: ${r_inf:,.0f} ({pct_inf:.1f}%)", annotation_position="bottom right", annotation_font_color="green"
         )
-                    
-        # D. Etiqueta Flotante con Resumen del Rango Estático
+
+        # Etiqueta Flotante (Badge)
         fig_back.add_annotation(
-        xref="paper", yref="paper",
-        x=0.01, y=0.99, # Posición esquina superior izquierda
-        text=f"<b>INFO RANGO ESTÁTICO</b><br>Precio Inicial: ${p_start:,.0f}<br>Amplitud Total: <b>{amplitud_total_pct:.1f}%</b>",
-        showarrow=False,
-        bgcolor="rgba(255, 255, 255, 0.8)",
-        bordercolor="#2ecc71",
-        borderwidth=1,
-        font=dict(size=12, color="black"),
-        align="left"
+            xref="paper", yref="paper", x=0.01, y=0.99,
+            text=f"<b>INFO RANGO ESTÁTICO</b><br>Precio Inicial: ${p_start:,.0f}<br>Amplitud Total: <b>{amplitud_total:.1f}%</b>",
+            showarrow=False, bgcolor="rgba(255,255,255,0.8)", bordercolor="#2ecc71", borderwidth=1, font=dict(color="black")
         )
-                    
-        # E. Marcadores de Rebalanceo (Igual que antes)
+
+        # Marcadores Rebalanceo
         if len(log_ops) > 0:
-        df_log_events = pd.DataFrame(log_ops)
-        df_log_events = df_log_events[df_log_events["Evento"].str.contains("Ruptura")]
-        if not df_log_events.empty:
-        f_ev = [data.index[i] for i in df_log_events['Día Índice']]
-        p_ev = df_log_events['Precio Ejecución'].values 
-        fig_back.add_trace(go.Scatter(x=f_ev, y=p_ev, mode='markers', marker=dict(color='red', size=8, symbol='x'), name='Rebalanceo'))
+            df_log_events = pd.DataFrame(log_ops)
+            df_log_events = df_log_events[df_log_events["Evento"].str.contains("Ruptura")]
+            if not df_log_events.empty:
+                f_ev = [data.index[i] for i in df_log_events['Día Índice']]
+                p_ev = df_log_events['Precio Ejecución'].values 
+                fig_back.add_trace(go.Scatter(x=f_ev, y=p_ev, mode='markers', marker=dict(color='red', size=8, symbol='x'), name='Rebalanceo'))
 
         fig_back.update_layout(template="plotly_white", height=500, title=f"Historia {ticker} vs Rangos")
         st.plotly_chart(fig_back, use_container_width=True)
-                    
-        # ... (El código siguiente de la Tabla sigue igual) ...
         
-        # Auditoría con Selectores (SIN REINICIAR)
+        # Auditoría con Selectores (SIN REINICIAR GRACIAS A SESSION STATE)
         st.subheader("📋 Auditoría de Operaciones")
         tipo_tabla = st.radio("Ver detalle de:", ["Estrategia Dinámica (Rebalanceos)", "Estrategia Estática (Resumen)"], horizontal=True)
         
