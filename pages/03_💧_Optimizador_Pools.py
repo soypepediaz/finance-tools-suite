@@ -67,11 +67,11 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
     res_dyn_final = []
     stats_rebalanceos = []
     
-    # Logs detallados (Solo para la simulación #0 o Backtest)
+    # Logs
     log_operaciones_dyn = [] 
     log_diario_estatica = []
     
-    # Historial de rangos dinámicos para graficar (Solo simulación #0)
+    # Historial de rangos (para gráfico)
     hist_dyn_upper = []
     hist_dyn_lower = []
 
@@ -92,11 +92,11 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
         p_min_st = p_inicial - delta_st
         p_max_st = p_inicial + delta_st
         
-        # Cálculo final Estática
+        # Estática Final
         p_final = serie_precios[-1]
         val_estatico = calcular_valor_v3_exacto(cap_inicial, p_inicial, p_final, p_min_st, p_max_st)
         in_range_mask = (serie_precios >= p_min_st) & (serie_precios <= p_max_st)
-        dias_in_st = np.sum(in_range_mask) # Dato clave solicitado
+        dias_in_st = np.sum(in_range_mask)
         fees_st = dias_in_st * (cap_inicial * fee_diario_st)
         res_st_final.append(val_estatico + fees_st)
         
@@ -110,49 +110,49 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
         num_rebalanceos = 0
         ratio_width = delta_dyn / p_inicial
         
-        # Guardar estado inicial para gráficos
+        # Guardar estado inicial para gráficos (día 0)
         if sim_idx == 0:
             hist_dyn_upper.append(p_max_dyn)
             hist_dyn_lower.append(p_min_dyn)
         
+        # Bucle diario
         for dia in range(1, filas):
             p_hoy = serie_precios[dia]
             
-            # Guardar histórico rangos para plot (Sim 0)
+            # Gráficos y Log Estática (Solo simulación 0)
             if sim_idx == 0:
                 hist_dyn_upper.append(p_max_dyn)
                 hist_dyn_lower.append(p_min_dyn)
                 
-                # Log Diario Estática (Solo Backtest/Sim 0)
                 en_rango_st = p_min_st <= p_hoy <= p_max_st
                 log_diario_estatica.append({
                     "Día Índice": dia,
                     "Precio": p_hoy,
-                    "En Rango": "✅ Sí" if en_rango_st else "❌ No",
-                    "Fees Acum": (dia * fee_diario_st * cap_inicial) if en_rango_st else 0 # Simplificado
+                    "En Rango": "✅" if en_rango_st else "❌"
                 })
 
             # Lógica Dinámica
             if p_min_dyn <= p_hoy <= p_max_dyn:
                 fees_acumulados_operacion += cap_dyn * fee_diario_dyn
             else:
+                # --- RUPTURA DE RANGO (Rebalanceo) ---
                 num_rebalanceos += 1
                 
                 evento = "Ruptura Superior ⬆️" if p_hoy > p_max_dyn else "Ruptura Inferior ⬇️"
-                p_ruptura = p_hoy # El precio exacto al que ocurre el evento (cierre del día)
-                
-                # Rango que teníamos ANTES de romperlo (para el log)
                 rango_previo_str = f"{p_min_dyn:.2f} - {p_max_dyn:.2f}"
                 
                 p_ref_anterior = (p_max_dyn + p_min_dyn) / 2
                 val_salida_pool = calcular_valor_v3_exacto(cap_dyn, p_ref_anterior, p_hoy, p_min_dyn, p_max_dyn)
                 
+                # IL Realizado
                 val_hold = (cap_dyn * 0.5) + ((cap_dyn * 0.5 / p_ref_anterior) * p_hoy)
                 il_realizado = max(0, val_hold - val_salida_pool)
                 
+                # Costes
                 coste_swap = val_salida_pool * 0.50 * fee_swap
                 costes_totales = coste_swap + gas
                 
+                # Capital Final Operación
                 cap_nuevo = val_salida_pool + fees_acumulados_operacion - costes_totales
                 
                 if sim_idx == 0:
@@ -160,7 +160,7 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                         "Operación": num_rebalanceos,
                         "Día Índice": dia,
                         "Rango Activo": rango_previo_str,
-                        "Precio Ejecución": p_ruptura,
+                        "Precio Ejecución": p_hoy,
                         "Evento": evento,
                         "Fees Generados": fees_acumulados_operacion,
                         "Pérdida IL (Info)": il_realizado,
@@ -168,13 +168,49 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
                         "Capital Final": cap_nuevo
                     })
                 
+                # Reset
                 cap_dyn = cap_nuevo
                 fees_acumulados_operacion = 0
                 nuevo_delta = p_hoy * ratio_width
                 p_min_dyn = p_hoy - nuevo_delta
                 p_max_dyn = p_hoy + nuevo_delta
 
-        res_dyn_final.append(cap_dyn + fees_acumulados_operacion)
+        # --- AL SALIR DEL BUCLE (FIN DEL PERIODO) ---
+        # Si la operación sigue abierta, hay que registrarla
+        if sim_idx == 0:
+            # Calculamos valor final 'Mark to Market'
+            p_cierre = serie_precios[-1]
+            p_ref_final = (p_max_dyn + p_min_dyn) / 2
+            
+            # Valor actual de la posición (puede tener IL latente)
+            val_final_pool = calcular_valor_v3_exacto(cap_dyn, p_ref_final, p_cierre, p_min_dyn, p_max_dyn)
+            
+            # IL Latente (solo informativo)
+            val_hold_final = (cap_dyn * 0.5) + ((cap_dyn * 0.5 / p_ref_final) * p_cierre)
+            il_latente = max(0, val_hold_final - val_final_pool)
+            
+            log_operaciones_dyn.append({
+                "Operación": num_rebalanceos + 1, # Es la siguiente a la última cerrada
+                "Día Índice": filas - 1,
+                "Rango Activo": f"{p_min_dyn:.2f} - {p_max_dyn:.2f}",
+                "Precio Ejecución": p_cierre,
+                "Evento": "Cierre Fin Periodo 🏁",
+                "Fees Generados": fees_acumulados_operacion,
+                "Pérdida IL (Info)": il_latente, # Aquí es latente, no realizado por venta
+                "Costes (Swap+Gas)": 0.0, # No hay coste porque no rebalanceamos, solo cerramos contabilidad
+                "Capital Final": val_final_pool + fees_acumulados_operacion
+            })
+
+        # Resultado final total acumulado
+        val_final_dyn_total = cap_dyn + fees_acumulados_operacion
+        # Ajuste: Si cerramos fuera de rango, el valor ya refleja la conversión, si cerramos dentro, refleja el valor mixto
+        # En la lógica anterior 'val_final_pool' ya hace esto. 
+        # Para mantener coherencia con el array de montecarlo:
+        p_cierre_loop = serie_precios[-1]
+        p_ref_loop = (p_max_dyn + p_min_dyn) / 2
+        val_cierre_loop = calcular_valor_v3_exacto(cap_dyn, p_ref_loop, p_cierre_loop, p_min_dyn, p_max_dyn)
+        
+        res_dyn_final.append(val_cierre_loop + fees_acumulados_operacion)
         stats_rebalanceos.append(num_rebalanceos)
 
     if show_progress:
@@ -183,7 +219,7 @@ def ejecutar_analisis_operaciones(precios_matrix, cap_inicial, apr_base, std_st,
     return (np.array(res_st_final), np.array(res_dyn_final), 
             log_operaciones_dyn, log_diario_estatica,
             hist_dyn_upper, hist_dyn_lower,
-            dias_in_st, delta_st) # Devolvemos métrica estática
+            dias_in_st, delta_st)
 
 # --- 4. INTERFAZ ---
 
@@ -272,34 +308,35 @@ with tab2:
                     val_st, val_dyn = res_st[0], res_dyn[0]
                     k1, k2, k3 = st.columns(3)
                     
-                    # Métrica Estática Mejorada
                     pct_in = (dias_in_st / len(precios_real)) * 100
                     k1.metric("Estática (Final)", f"${val_st:,.0f}", f"{val_st-capital_inicial:+.0f} $")
-                    k1.caption(f"✅ En Rango: {dias_in_st} días ({pct_in:.1f}%)") # <--- NUEVO
+                    k1.caption(f"✅ En Rango: {dias_in_st} días ({pct_in:.1f}%)")
                     
                     k2.metric("Dinámica (Final)", f"${val_dyn:,.0f}", f"{val_dyn-capital_inicial:+.0f} $")
                     k3.metric("Diferencia", f"${val_dyn-val_st:,.0f}", delta_color="normal")
                     
-                    # --- GRÁFICO MEJORADO ---
+                    # --- GRÁFICO ---
                     st.subheader("Visualización de Estrategias")
                     fig_back = go.Figure()
                     
                     # 1. Rango Dinámico (Banda Azul)
-                    # Truco: Rellenamos entre Upper y Lower
-                    # Primero la línea inferior (invisible), luego la superior rellenando hasta la inferior
                     fig_back.add_trace(go.Scatter(
                         x=fechas_real, y=h_low, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
                     ))
                     fig_back.add_trace(go.Scatter(
                         x=fechas_real, y=h_up, mode='lines', line=dict(width=0), 
-                        fill='tonexty', fillcolor='rgba(0, 100, 255, 0.2)', # Azul semitransparente
+                        fill='tonexty', fillcolor='rgba(0, 100, 255, 0.2)',
                         name='Rango Dinámico'
                     ))
                     
-                    # 2. Precio Activo
-                    fig_back.add_trace(go.Scatter(x=fechas_real, y=data['Close'], mode='lines', name='Precio BTC', line=dict(color='white', width=2)))
+                    # 2. Precio Activo (AHORA EN NEGRO)
+                    fig_back.add_trace(go.Scatter(
+                        x=fechas_real, y=data['Close'], mode='lines', 
+                        name='Precio BTC', 
+                        line=dict(color='black', width=2) # <--- CAMBIO DE COLOR AQUÍ
+                    ))
                     
-                    # 3. Rango Estático (Líneas Verdes)
+                    # 3. Rango Estático
                     p_start = precios_real[0][0]
                     r_sup = p_start + (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
                     r_inf = p_start - (p_start * (vol_real * np.sqrt(bb_window/365) * std_estatica))
@@ -308,15 +345,19 @@ with tab2:
                     
                     # 4. Marcadores de Rebalanceo
                     if len(log_ops) > 0:
-                        df_log = pd.DataFrame(log_ops)
-                        f_ev = [fechas_real[i] for i in df_log['Día Índice']]
-                        p_ev = [data['Close'].iloc[i] for i in df_log['Día Índice']]
-                        fig_back.add_trace(go.Scatter(x=f_ev, y=p_ev, mode='markers', marker=dict(color='yellow', size=8, symbol='x'), name='Rebalanceo'))
+                        df_log_temp = pd.DataFrame(log_ops)
+                        # Filtramos solo los eventos de ruptura para pintar las X, no el cierre final
+                        df_log_events = df_log_temp[df_log_temp["Evento"].str.contains("Ruptura")]
+                        
+                        if not df_log_events.empty:
+                            f_ev = [fechas_real[i] for i in df_log_events['Día Índice']]
+                            p_ev = [data['Close'].iloc[i] for i in df_log_events['Día Índice']]
+                            fig_back.add_trace(go.Scatter(x=f_ev, y=p_ev, mode='markers', marker=dict(color='red', size=8, symbol='x'), name='Rebalanceo'))
 
-                    fig_back.update_layout(template="plotly_dark", height=500, title=f"Evolución: {ticker}")
+                    fig_back.update_layout(template="plotly_white", height=500, title=f"Historia {ticker}") # Cambié a plotly_white para que contraste mejor con la línea negra
                     st.plotly_chart(fig_back, use_container_width=True)
                     
-                    # --- TABLA DE AUDITORÍA CON SELECTOR ---
+                    # --- TABLA DE AUDITORÍA ---
                     st.subheader("📋 Auditoría de Operaciones")
                     
                     tipo_tabla = st.radio("Ver detalle de:", ["Estrategia Dinámica (Rebalanceos)", "Estrategia Estática (Resumen)"], horizontal=True)
@@ -326,11 +367,9 @@ with tab2:
                             df_ops = pd.DataFrame(log_ops)
                             df_ops["Fecha"] = [fechas_real[i].strftime('%Y-%m-%d') for i in df_ops['Día Índice']]
                             
-                            # Corrección de tipos
                             cols_num = ["Fees Generados", "Costes (Swap+Gas)", "Pérdida IL (Info)", "Capital Final", "Precio Ejecución"]
                             for c in cols_num: df_ops[c] = df_ops[c].astype(float)
                             
-                            # Columnas solicitadas: Operación, Fecha, Rango, Precio Ejec, Métricas...
                             cols_show = ["Operación", "Fecha", "Rango Activo", "Precio Ejecución", "Evento", "Fees Generados", "Pérdida IL (Info)", "Costes (Swap+Gas)", "Capital Final"]
                             
                             st.dataframe(df_ops[cols_show].style.format({
@@ -343,16 +382,15 @@ with tab2:
                             
                             # P&L
                             tot_fees = df_ops["Fees Generados"].sum()
-                            tot_gastos = df_ops["Costes (Swap+Gas)"].sum() + df_ops["Pérdida IL (Info)"].sum()
+                            tot_gastos = df_ops["Costes (Swap+Gas)"].sum() # IL aquí es informativo
                             neto = tot_fees - tot_gastos
-                            st.markdown(f"**Resultado Neto Operativo:** Fees (${tot_fees:,.2f}) - Gastos (${tot_gastos:,.2f}) = **${neto:,.2f}**")
+                            st.markdown(f"**Resultado Neto Operativo:** Fees (${tot_fees:,.2f}) - Costes Fricción (${tot_gastos:,.2f}) = **${neto:,.2f}**")
                         else:
-                            st.success("Sin operaciones de rebalanceo (Hold perfecto).")
+                            st.success("Error: No se generó registro de operaciones.")
                             
-                    else: # Estrategia Estática
-                        st.info("La estrategia estática es pasiva. Aquí mostramos el estado diario.")
+                    else:
+                        st.info("Estado diario de la estrategia Estática:")
                         if len(log_st) > 0:
-                            # Mostramos solo primeras y últimas filas para no saturar si son muchos días
                             df_st = pd.DataFrame(log_st)
                             df_st["Fecha"] = [fechas_real[i].strftime('%Y-%m-%d') for i in df_st['Día Índice']]
                             st.dataframe(df_st[["Fecha", "Precio", "En Rango"]].style.format({"Precio": "${:,.2f}"}), use_container_width=True, height=300)
