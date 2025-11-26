@@ -655,7 +655,6 @@ with tab_sim:
     # dentro de esta sección o en una función separada.
 
 def simulacion_seccion():
-    
     # --- SECCIÓN 1: ABRIMOS LA POSICIÓN ---
     st.subheader("1. Configuración de Apertura de Posición")
     
@@ -663,7 +662,7 @@ def simulacion_seccion():
     
     with col1:
         tipo_posicion = st.radio("¿Qué estrategia quieres realizar?", ["Largo (Long)", "Corto (Short)"], horizontal=True)
-        inversion_usdc = st.number_input("Inversión inicial (USDC)", min_value=0.0, value=1000.0, step=100.0)
+        inversion_usdc = st.number_input("Inversión inicial (USDC)", min_value=0.0, value=100000.0, step=1000.0)
         
         # Definición de activos según la posición
         if "Largo" in tipo_posicion:
@@ -676,6 +675,16 @@ def simulacion_seccion():
             lbl_deuda = "Activo Volátil"
             
         precio_activo_inicial = st.number_input(lbl_precio, min_value=0.0001, value=65000.0, step=10.0)
+
+        # CÁLCULO Y VISUALIZACIÓN DEL COLATERAL DE PARTIDA
+        colateral_base_qty_calc = 0
+        if "Largo" in tipo_posicion:
+            colateral_base_qty_calc = inversion_usdc / precio_activo_inicial
+            st.caption(f"🔵 Tienes un total de **{colateral_base_qty_calc:,.4f} {lbl_colateral}** de partida (Inversión / Precio).")
+        else:
+            colateral_base_qty_calc = inversion_usdc
+            st.caption(f"🔵 Tienes un total de **${colateral_base_qty_calc:,.2f} {lbl_colateral}** de partida.")
+
 
     with col2:
         ltv_liquidacion = st.slider("LTV de Liquidación del Protocolo (%)", 0, 100, 78) / 100
@@ -691,7 +700,7 @@ def simulacion_seccion():
         modo_apalancamiento = st.radio("Modo de selección:", ["Multiplicador (x)", "Cantidad de Deuda"], horizontal=True)
     
     with c_lev2:
-        # Cálculo preliminar de colateral base
+        # Cálculo preliminar de colateral base (Redundante pero necesario para scope local limpio)
         colateral_base_qty = 0
         colateral_base_usd = 0
         
@@ -705,18 +714,14 @@ def simulacion_seccion():
         deuda_solicitada_usd = 0
         
         if modo_apalancamiento == "Multiplicador (x)":
-            multiplicador = st.number_input("Selecciona apalancamiento (1x = sin deuda)", 1.0, 10.0, 1.5, 0.1)
-            # Deuda = Inversión * (Mult - 1). 
-            # Ojo: En Long con looping, Lev = Colateral / Equity.
-            # Simplificación: Deuda a tomar prestada.
+            multiplicador = st.number_input("Selecciona apalancamiento (1x = sin deuda)", 1.0, 10.0, 2.0, 0.1)
             if multiplicador > 1:
                 deuda_solicitada_usd = inversion_usdc * (multiplicador - 1)
         else:
-            # Límite máximo teórico simple para el input (aunque el protocolo limita por LTV)
             max_borrow = inversion_usdc * 10 
             deuda_input = st.number_input(f"Cantidad de deuda en {lbl_deuda}", 0.0, max_borrow, 0.0)
             if "Largo" in tipo_posicion:
-                deuda_solicitada_usd = deuda_input # Ya está en USDC
+                deuda_solicitada_usd = deuda_input 
             else:
                 deuda_solicitada_usd = deuda_input * precio_activo_inicial
 
@@ -724,75 +729,75 @@ def simulacion_seccion():
         hacer_looping = st.checkbox("¿Hacer Looping?", value=True, help="Si marcas esto, la deuda se usa para comprar más colateral (Largo) o se vende para aumentar colateral estable (Corto).")
 
     # --- CÁLCULOS INICIALES ---
-    
-    # 1. Determinar Colateral Final y Deuda Final
     collateral_final_qty = colateral_base_qty
-    deuda_final_qty = 0 # En unidades del activo deuda
+    deuda_final_qty = 0 
     
     if hacer_looping:
         if "Largo" in tipo_posicion:
-            # Tomamos prestado USDC, compramos Volátil y añadimos al colateral
             qty_extra = deuda_solicitada_usd / precio_activo_inicial
             collateral_final_qty += qty_extra
-            deuda_final_qty = deuda_solicitada_usd # Deuda en USDC
+            deuda_final_qty = deuda_solicitada_usd 
         else:
-            # Short: Tomamos prestado Volátil, vendemos por USDC y añadimos al colateral
             deuda_qty_token = deuda_solicitada_usd / precio_activo_inicial
-            collateral_final_qty += deuda_solicitada_usd # Colateral es USDC
-            deuda_final_qty = deuda_qty_token # Deuda es Token Volátil
+            collateral_final_qty += deuda_solicitada_usd 
+            deuda_final_qty = deuda_qty_token 
     else:
-        # Sin Looping (La deuda se queda "fuera" o en wallet, pero cuenta como pasivo contra el colateral inicial)
         if "Largo" in tipo_posicion:
             deuda_final_qty = deuda_solicitada_usd
         else:
             deuda_final_qty = deuda_solicitada_usd / precio_activo_inicial
 
-    # Valores en USD para cálculos de riesgo
     valor_colateral_usd = 0
     valor_deuda_usd = 0
     
     if "Largo" in tipo_posicion:
         valor_colateral_usd = collateral_final_qty * precio_activo_inicial
-        valor_deuda_usd = deuda_final_qty # Es USDC
+        valor_deuda_usd = deuda_final_qty 
     else:
-        valor_colateral_usd = collateral_final_qty # Es USDC
+        valor_colateral_usd = collateral_final_qty 
         valor_deuda_usd = deuda_final_qty * precio_activo_inicial
 
-    # Health Factor y Precio Liquidación
-    # HF = (Colateral_USD * LTV_Liq) / Deuda_USD
     hf_inicial = 999.0
     precio_liquidacion = 0.0
     
-    if valor_deuda_usd > 0:
-        hf_inicial = (valor_colateral_usd * ltv_liquidacion) / valor_deuda_usd
-        
-        if "Largo" in tipo_posicion:
-            # Liq Price: Cuando (Colateral_qty * P * LTV) = Deuda
-            # P = Deuda / (Colateral_qty * LTV)
-            precio_liquidacion = deuda_final_qty / (collateral_final_qty * ltv_liquidacion)
+    # Función auxiliar para calcular Liq Price
+    def calc_liq_price(c_qty, d_qty, tipo, ltv):
+        if d_qty <= 0: return 0.0
+        if "Largo" in tipo:
+            # Long: Price = Deuda / (Colateral * LTV)
+            return d_qty / (c_qty * ltv)
         else:
-            # Short: Cuando (Colateral_USD * LTV) = (Deuda_qty * P)
-            # P = (Colateral_USD * LTV) / Deuda_qty
-            precio_liquidacion = (valor_colateral_usd * ltv_liquidacion) / deuda_final_qty
+            # Short: Price = (Colateral * LTV) / Deuda
+            return (c_qty * ltv) / d_qty
+
+    precio_liquidacion = calc_liq_price(collateral_final_qty, deuda_final_qty, tipo_posicion, ltv_liquidacion)
     
-    # Precio Defensa
     precio_defensa = 0.0
     if "Largo" in tipo_posicion:
         precio_defensa = precio_liquidacion * (1 + umbral_defensa)
     else:
         precio_defensa = precio_liquidacion * (1 - umbral_defensa)
 
-    # Validar riesgo inicial
     if valor_deuda_usd > 0 and hf_inicial < 1.0:
-        st.error(f"⚠️ ¡Cuidado! Con estos parámetros naces liquidado. HF: {hf_inicial:.2f}")
+        # Recalcular HF para mostrar alerta correcta
+        hf_val = (valor_colateral_usd * ltv_liquidacion) / valor_deuda_usd
+        if hf_val < 1.0:
+            st.error(f"⚠️ ¡Cuidado! Con estos parámetros naces liquidado. HF: {hf_val:.2f}")
 
-    # --- MOSTRAR DATOS SECCIÓN 1 ---
+    # --- MOSTRAR DATOS SECCIÓN 1 (ACTUALIZADO CON CANTIDADES) ---
     st.info("📊 **Resumen de Apertura**")
     col_res1, col_res2, col_res3, col_res4 = st.columns(4)
-    col_res1.metric("Colateral Inicial (USD)", f"${colateral_base_usd:,.2f}")
-    col_res2.metric("Colateral Final (USD)", f"${valor_colateral_usd:,.2f}", delta=f"{valor_colateral_usd-colateral_base_usd:,.2f} USD" if hacer_looping else None)
+    
+    # Formatear etiquetas con cantidades
+    label_col_ini = f"{colateral_base_qty:,.4f} {lbl_colateral}" if "Largo" in tipo_posicion else f"${colateral_base_qty:,.2f}"
+    label_col_fin = f"{collateral_final_qty:,.4f} {lbl_colateral}" if "Largo" in tipo_posicion else f"${collateral_final_qty:,.2f}"
+
+    col_res1.metric("Colateral Inicial", f"${colateral_base_usd:,.2f}", delta=label_col_ini, delta_color="off")
+    col_res2.metric("Colateral Final", f"${valor_colateral_usd:,.2f}", delta=label_col_fin)
     col_res3.metric("Deuda Total (USD)", f"${valor_deuda_usd:,.2f}")
-    col_res4.metric("Health Factor", f"{hf_inicial:.2f}")
+    
+    hf_display = (valor_colateral_usd * ltv_liquidacion) / valor_deuda_usd if valor_deuda_usd > 0 else 999
+    col_res4.metric("Health Factor", f"{hf_display:.2f}")
     
     col_res5, col_res6 = st.columns(2)
     col_res5.metric("Precio Liquidación", f"${precio_liquidacion:,.2f}")
@@ -802,37 +807,28 @@ def simulacion_seccion():
     st.markdown("---")
     st.subheader("2. Desarrollo de la Posición (Intermedio)")
     
-    st.write("Simula qué pasa si el precio cambia y pasan los días.")
-    
     c_dev1, c_dev2, c_dev3 = st.columns(3)
     with c_dev1:
         precio_intermedio = st.number_input("Precio intermedio del Activo Volátil", value=precio_activo_inicial, step=100.0)
     with c_dev2:
         dias_pasados = st.number_input("Días transcurridos", min_value=0, value=30, step=1)
     
-    # Cálculo de intereses
-    # Interés simple aproximado sobre el principal de la deuda
-    # Deuda * (Rate * Dias / 365)
     interes_generado_token = 0
     interes_generado_usd = 0
     
+    # Cálculo de deuda con intereses
     if "Largo" in tipo_posicion:
-        # Deuda es USDC
         interes_generado_usd = deuda_final_qty * (borrow_rate * dias_pasados / 365)
-        deuda_total_actual_token = deuda_final_qty + interes_generado_usd # Sigue siendo USDC
-        # Valoración actual
+        deuda_total_actual_token = deuda_final_qty + interes_generado_usd 
         valor_colateral_actual_usd = collateral_final_qty * precio_intermedio
         valor_deuda_actual_usd = deuda_total_actual_token
     else:
-        # Deuda es Token
         interes_generado_token = deuda_final_qty * (borrow_rate * dias_pasados / 365)
-        deuda_total_actual_token = deuda_final_qty + interes_generado_token # Token Volátil
+        deuda_total_actual_token = deuda_final_qty + interes_generado_token 
         interes_generado_usd = interes_generado_token * precio_intermedio
-        # Valoración actual
-        valor_colateral_actual_usd = collateral_final_qty # USDC
+        valor_colateral_actual_usd = collateral_final_qty 
         valor_deuda_actual_usd = deuda_total_actual_token * precio_intermedio
 
-    # PnL Latente (Unrealized) en este momento si cerramos todo
     equity_actual_usd = valor_colateral_actual_usd - valor_deuda_actual_usd
     pnl_usd = equity_actual_usd - inversion_usdc
     pnl_pct = (pnl_usd / inversion_usdc) * 100 if inversion_usdc > 0 else 0
@@ -840,31 +836,56 @@ def simulacion_seccion():
     col_res_int1, col_res_int2, col_res_int3 = st.columns(3)
     col_res_int1.metric("Intereses Generados (USD)", f"-${interes_generado_usd:,.2f}")
     col_res_int2.metric("Valor Neto Actual (Equity)", f"${equity_actual_usd:,.2f}")
-    col_res_int3.metric("PnL Latente (Si cierras íntegramente hoy)", f"${pnl_usd:,.2f} ({pnl_pct:.2f}%)", delta_color="normal")
+    col_res_int3.metric("PnL Latente (Si cierras hoy)", f"${pnl_usd:,.2f} ({pnl_pct:.2f}%)", delta_color="normal")
 
-    # Lógica de cierre / repago
     st.markdown("**Acciones sobre la posición**")
-    accion = st.radio("Elige una acción:", ["Mantener posición", "Cerrar Íntegramente", "Cerrar Parcialmente"], horizontal=True)
+    # AÑADIDA OPCIÓN "Añadir Colateral"
+    accion = st.radio("Elige una acción:", ["Mantener posición", "Añadir Colateral", "Cerrar Íntegramente", "Cerrar Parcialmente"], horizontal=True)
 
-    # Variables de estado para la Sección 3
     colateral_remanente_qty = collateral_final_qty
-    deuda_remanente_token = deuda_final_qty # Sin contar intereses para la logica simple, o sumando? 
-    # Lo correcto: La deuda crece con intereses. El remanente debe incluir intereses capitalizados o pendientes.
-    # Asumiremos que los intereses se suman al principal de la deuda (compound o debt balance grow)
     deuda_remanente_token = deuda_total_actual_token 
     
     dinero_en_wallet_usado = 0.0
-    colateral_vendido_qty = 0.0
-    deuda_pagada_token = 0.0
-    coste_realizado_usd = 0.0 # Perdida o ganancia ya materializada al cerrar
     
-    if accion == "Cerrar Íntegramente":
+    # Variables para calcular nuevos precios de liquidación tras la acción
+    nuevo_liq_price = precio_liquidacion
+    nuevo_defensa_price = precio_defensa
+
+    if accion == "Añadir Colateral":
+        st.info("💡 Añadir colateral reduce tu LTV y aleja el precio de liquidación.")
+        col1_add, col2_add = st.columns(2)
+        
+        with col1_add:
+            # Input para añadir colateral
+            qty_add = st.number_input(f"Cantidad de {lbl_colateral} a añadir", min_value=0.0, value=0.0, step=0.1)
+            
+        # Actualizamos lógica
+        if qty_add > 0:
+            dinero_en_wallet_usado = qty_add * precio_intermedio if "Largo" in tipo_posicion else qty_add
+            
+            # El colateral aumenta
+            if "Largo" in tipo_posicion:
+                colateral_remanente_qty += qty_add
+            else:
+                colateral_remanente_qty += qty_add # Short: añadir USDC
+            
+            st.success(f"Has añadido {qty_add:,.4f} {lbl_colateral} a la posición.")
+            
+            # Recalcular Liquidation Price
+            nuevo_liq_price = calc_liq_price(colateral_remanente_qty, deuda_remanente_token, tipo_posicion, ltv_liquidacion)
+            if "Largo" in tipo_posicion:
+                nuevo_defensa_price = nuevo_liq_price * (1 + umbral_defensa)
+            else:
+                nuevo_defensa_price = nuevo_liq_price * (1 - umbral_defensa)
+                
+            st.metric("Nuevo Precio Liquidación", f"${nuevo_liq_price:,.2f}", delta=f"{nuevo_liq_price - precio_liquidacion:,.2f}")
+            st.metric("Nuevo Precio Defensa", f"${nuevo_defensa_price:,.2f}")
+            
+    elif accion == "Cerrar Íntegramente":
         metodo_pago = st.radio("¿Cómo quieres pagar la deuda?", ["Vender Colateral", "Usar Wallet (USDC Externo)"])
         
         if metodo_pago == "Vender Colateral":
-            # Se vende suficiente colateral para pagar la deuda total
             if "Largo" in tipo_posicion:
-                # Vendo (DeudaUSD / Precio) cantidad de token
                 colateral_necesario = deuda_total_actual_token / precio_intermedio
                 if colateral_necesario > collateral_final_qty:
                     st.error("❌ Insolvente: No tienes suficiente colateral para pagar la deuda.")
@@ -873,9 +894,7 @@ def simulacion_seccion():
                     valor_remanente = remanente_colateral * precio_intermedio
                     st.success(f"Has vendido {colateral_necesario:.4f} {lbl_colateral} para pagar la deuda.")
                     st.write(f"Te quedan **{remanente_colateral:.4f} {lbl_colateral}** valorados en **${valor_remanente:,.2f}**.")
-                    st.write(f"Resultado final: **{pnl_usd:,.2f} USD** ({pnl_pct:.2f}%).")
             else:
-                # Short: Colateral es USDC. Pago deuda comprando Token con Colateral.
                 coste_compra_token = deuda_total_actual_token * precio_intermedio
                 if coste_compra_token > collateral_final_qty:
                     st.error("❌ Insolvente.")
@@ -883,24 +902,20 @@ def simulacion_seccion():
                     remanente_usdc = collateral_final_qty - coste_compra_token
                     st.success(f"Has usado ${coste_compra_token:,.2f} de tu colateral para recomprar el token y cerrar.")
                     st.write(f"Te quedan **${remanente_usdc:,.2f} USDC**.")
-                    st.write(f"Resultado final: **{pnl_usd:,.2f} USD** ({pnl_pct:.2f}%).")
             
-            # Reset para sección 3
             colateral_remanente_qty = 0
             deuda_remanente_token = 0
             
-        else: # Pagar con Wallet
+        else: 
             st.warning("Nota: Al pagar con wallet, asumes la pérdida/ganancia de la deuda, pero te quedas con todo el colateral intacto.")
             if "Largo" in tipo_posicion:
                 st.write(f"Pagas **${deuda_total_actual_token:,.2f}** de tu bolsillo.")
-                st.write(f"Liberas **{collateral_final_qty:.4f} {lbl_colateral}** (Valor actual: ${collateral_final_qty*precio_intermedio:,.2f}).")
+                st.write(f"Liberas **{collateral_final_qty:.4f} {lbl_colateral}**.")
             else:
                 coste_recompra = deuda_total_actual_token * precio_intermedio
                 st.write(f"Pagas **${coste_recompra:,.2f}** para recomprar el token y cerrar.")
                 st.write(f"Recuperas tu colateral íntegro: **${collateral_final_qty:,.2f} USDC**.")
             
-            # Reset para sección 3 (Posición cerrada, pero el activo colateral ahora es libre)
-            # Para efectos de 'Estrategia final', ya no hay deuda.
             deuda_remanente_token = 0
 
     elif accion == "Cerrar Parcialmente":
@@ -915,30 +930,52 @@ def simulacion_seccion():
         else:
             valor_a_pagar_usd = cant_a_pagar_token * precio_intermedio
             
-        st.markdown(f"**Operación:** Vas a repagar {pct_repay*100}% de la deuda. Valor aprox: ${valor_a_pagar_usd:,.2f}.")
+        st.markdown(f"**Operación:** Vas a repagar {pct_repay*100:.0f}% de la deuda. Valor aprox: ${valor_a_pagar_usd:,.2f}.")
         
-        if pnl_usd < 0:
-            st.warning("⚠️ Atención: Estás cerrando parte de la posición en pérdidas. Esto 'realiza' (hace efectiva) la pérdida proporcional.")
+        colateral_usado_pago = 0.0
 
         if metodo_pago == "Vender Colateral":
-            # Reducimos colateral para pagar deuda
             if "Largo" in tipo_posicion:
-                colateral_a_vender = valor_a_pagar_usd / precio_intermedio
-                colateral_remanente_qty -= colateral_a_vender
+                colateral_usado_pago = valor_a_pagar_usd / precio_intermedio
+                colateral_remanente_qty -= colateral_usado_pago
                 deuda_remanente_token -= cant_a_pagar_token
-                st.write(f"Se vendieron {colateral_a_vender:.4f} {lbl_colateral}.")
             else:
-                # Short: Usamos USDC colateral para comprar token deuda
-                colateral_remanente_qty -= valor_a_pagar_usd # USDC
+                colateral_usado_pago = valor_a_pagar_usd # USDC
+                colateral_remanente_qty -= valor_a_pagar_usd 
                 deuda_remanente_token -= cant_a_pagar_token
         else:
-            # Wallet: Colateral intacto, deuda baja, wallet baja
             dinero_en_wallet_usado = valor_a_pagar_usd
             deuda_remanente_token -= cant_a_pagar_token
-            # Aquí guardamos el "coste hundido" para el PnL final
-            coste_realizado_usd = valor_a_pagar_usd # Dinero que salió del bolsillo
+        
+        # --- NUEVA LÓGICA DE VISUALIZACIÓN DETALLADA ---
+        # Recalcular precios de riesgo con la nueva estructura de deuda/colateral
+        nuevo_liq_price = calc_liq_price(colateral_remanente_qty, deuda_remanente_token, tipo_posicion, ltv_liquidacion)
+        if "Largo" in tipo_posicion:
+            nuevo_defensa_price = nuevo_liq_price * (1 + umbral_defensa)
+        else:
+            nuevo_defensa_price = nuevo_liq_price * (1 - umbral_defensa)
 
-    # --- SECCIÓN 3: RESULTADO FINAL ---
+        st.markdown("#### 📝 Resultado del Repago Parcial")
+        
+        txt_col_restante = f"{colateral_remanente_qty:,.4f} {lbl_colateral}" if "Largo" in tipo_posicion else f"${colateral_remanente_qty:,.2f}"
+        txt_deuda_restante = f"${deuda_remanente_token:,.2f}" if "Largo" in tipo_posicion else f"{deuda_remanente_token:,.4f} {lbl_deuda}"
+
+        if metodo_pago == "Vender Colateral":
+            st.info(f"""
+            Has utilizado **{colateral_usado_pago:,.4f} {lbl_colateral}** para cancelar deuda. 
+            \n🔹 **Situación Final:** Te quedan **{txt_col_restante}** y tu deuda ha bajado a **{txt_deuda_restante}**.
+            """)
+        else:
+            st.info(f"""
+            Has utilizado fondos externos. Tu colateral se mantiene intacto.
+            \n🔹 **Situación Final:** Tienes **{txt_col_restante}** y tu deuda ha bajado a **{txt_deuda_restante}**.
+            """)
+            
+        c_new_liq1, c_new_liq2 = st.columns(2)
+        c_new_liq1.metric("Nuevo Precio Liquidación", f"${nuevo_liq_price:,.2f}")
+        c_new_liq2.metric("Nuevo Precio Defensa", f"${nuevo_defensa_price:,.2f}")
+
+    # --- SECCIÓN 3: RESULTADO FINAL (Lógica Intacta) ---
     st.markdown("---")
     st.subheader("3. Proyección a Futuro (Cierre Final)")
     
@@ -947,28 +984,17 @@ def simulacion_seccion():
     else:
         precio_final = st.number_input(f"Precio futuro de cierre para {lbl_colateral if 'Largo' in tipo_posicion else 'Activo Deuda'}", value=precio_intermedio, step=100.0)
         
-        # Cálculo final
-        # Valor del colateral remanente al precio final
         valor_colateral_final_usd = 0
         coste_cierre_deuda_final_usd = 0
         
         if "Largo" in tipo_posicion:
             valor_colateral_final_usd = colateral_remanente_qty * precio_final
-            coste_cierre_deuda_final_usd = deuda_remanente_token # Deuda en USDC (asumiendo no más intereses desde punto 2 o simplificando)
+            coste_cierre_deuda_final_usd = deuda_remanente_token 
         else:
-            valor_colateral_final_usd = colateral_remanente_qty # USDC
+            valor_colateral_final_usd = colateral_remanente_qty 
             coste_cierre_deuda_final_usd = deuda_remanente_token * precio_final
             
-        # PnL Final = (Lo que me queda limpio) - (Lo que puse al inicio) - (Lo que pagué extra desde wallet)
         equity_final = valor_colateral_final_usd - coste_cierre_deuda_final_usd
-        
-        # Ajuste por flujos de caja (Wallet)
-        # Si pagué con wallet en el paso intermedio, eso es dinero que "salió".
-        # Profit = (Equity Final al cerrar) - (Inversion Inicial) - (Dinero extra añadido desde Wallet)
-        
-        # Sin embargo, si pagué con wallet, reduje deuda sin tocar colateral.
-        # El equity final ya refleja esa deuda menor, pero debo restar el cash que inyecté.
-        
         resultado_total_usd = equity_final - inversion_usdc - dinero_en_wallet_usado
         roi_total = (resultado_total_usd / inversion_usdc) * 100
         
@@ -987,11 +1013,11 @@ def simulacion_seccion():
         else:
             st.success(f"Ganancia total: {resultado_total_usd:.2f} USD.")
 
-        # Resultado en activo (Si el usuario quiere ver si ganó más monedas)
-        # Solo relevante si es Long
         if "Largo" in tipo_posicion and precio_final > 0:
             resultado_en_tokens = resultado_total_usd / precio_final
             st.write(f"Resultado medido en tokens: **{resultado_en_tokens:.4f} {lbl_colateral}**")
+
+# Recordatorio: Esta función debe ser llamada dentro de 'with tab_sim:'
 
 simulacion_seccion()
 
