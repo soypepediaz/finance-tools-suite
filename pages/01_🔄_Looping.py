@@ -853,23 +853,52 @@ def simulacion_seccion():
 
     if accion == "Añadir Colateral":
         st.info("💡 Añadir colateral reduce tu LTV y aleja el precio de liquidación.")
-        col1_add, col2_add = st.columns(2)
         
+        # NUEVA LÓGICA: Elegir tipo de activo a depositar
+        lbl_activo_volatil = "Activo Volátil" if "Largo" in tipo_posicion else "Activo Volátil (Swap a USDC)"
+        opciones_deposito = ["USDC", lbl_activo_volatil]
+        
+        tipo_aporte = st.radio("¿Qué activo vas a depositar?", opciones_deposito, horizontal=True)
+        
+        col1_add, col2_add = st.columns(2)
         with col1_add:
-            # Input para añadir colateral
-            qty_add = st.number_input(f"Cantidad de {lbl_colateral} a añadir", min_value=0.0, value=0.0, step=0.1)
-            
-        # Actualizamos lógica
-        if qty_add > 0:
-            dinero_en_wallet_usado = qty_add * precio_intermedio if "Largo" in tipo_posicion else qty_add
-            
-            # El colateral aumenta
+            step_val = 0.1 if tipo_aporte == "USDC" else 0.0001
+            qty_input = st.number_input(f"Cantidad de {tipo_aporte} a añadir", min_value=0.0, value=0.0, step=step_val)
+        
+        qty_added_to_collateral = 0.0
+        msg_conversion = ""
+
+        if qty_input > 0:
             if "Largo" in tipo_posicion:
-                colateral_remanente_qty += qty_add
+                # Posición Larga: El colateral es el Activo Volátil.
+                if tipo_aporte == "USDC":
+                    # Aporta USDC -> Se convierte a Activo Volátil al precio intermedio
+                    qty_added_to_collateral = qty_input / precio_intermedio
+                    dinero_en_wallet_usado = qty_input
+                    msg_conversion = f"Has depositado **${qty_input:,.2f} USDC**, que se han convertido en **{qty_added_to_collateral:,.4f} Activo Volátil**."
+                else:
+                    # Aporta Activo Volátil -> Se suma directo
+                    qty_added_to_collateral = qty_input
+                    dinero_en_wallet_usado = qty_input * precio_intermedio # Valor equivalente en USD
             else:
-                colateral_remanente_qty += qty_add # Short: añadir USDC
+                # Posición Corta: El colateral es USDC.
+                if tipo_aporte == "USDC":
+                    # Aporta USDC -> Se suma directo
+                    qty_added_to_collateral = qty_input
+                    dinero_en_wallet_usado = qty_input
+                else:
+                    # Aporta Activo Volátil -> Se vende por USDC
+                    qty_added_to_collateral = qty_input * precio_intermedio
+                    dinero_en_wallet_usado = qty_added_to_collateral
+                    msg_conversion = f"Has depositado **{qty_input:,.4f} Activo Volátil**, que se han vendido por **${qty_added_to_collateral:,.2f} USDC** de colateral."
+
+            # Actualizar el colateral remanente
+            colateral_remanente_qty += qty_added_to_collateral
             
-            st.success(f"Has añadido {qty_add:,.4f} {lbl_colateral} a la posición.")
+            if msg_conversion:
+                st.success(msg_conversion)
+            else:
+                st.success(f"Has añadido **{qty_added_to_collateral:,.4f} {lbl_colateral if 'Largo' in tipo_posicion else 'USDC'}** a tu colateral.")
             
             # Recalcular Liquidation Price
             nuevo_liq_price = calc_liq_price(colateral_remanente_qty, deuda_remanente_token, tipo_posicion, ltv_liquidacion)
@@ -878,8 +907,9 @@ def simulacion_seccion():
             else:
                 nuevo_defensa_price = nuevo_liq_price * (1 - umbral_defensa)
                 
-            st.metric("Nuevo Precio Liquidación", f"${nuevo_liq_price:,.2f}", delta=f"{nuevo_liq_price - precio_liquidacion:,.2f}")
-            st.metric("Nuevo Precio Defensa", f"${nuevo_defensa_price:,.2f}")
+            c_new_liq1, c_new_liq2 = st.columns(2)
+            c_new_liq1.metric("Nuevo Precio Liquidación", f"${nuevo_liq_price:,.2f}", delta=f"{nuevo_liq_price - precio_liquidacion:,.2f}")
+            c_new_liq2.metric("Nuevo Precio Defensa", f"${nuevo_defensa_price:,.2f}")
             
     elif accion == "Cerrar Íntegramente":
         metodo_pago = st.radio("¿Cómo quieres pagar la deuda?", ["Vender Colateral", "Usar Wallet (USDC Externo)"])
