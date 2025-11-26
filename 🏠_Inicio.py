@@ -1,35 +1,33 @@
 import streamlit as st
 
-# Configuración de la página: Colapsamos el menú lateral por defecto
+# Configuración de la página
 st.set_page_config(
     page_title="Looping Master - Campamento DeFi",
-    page_icon="mascota.png", # <--- Pon aquí el nombre exacto de tu archivo
+    page_icon="mascota.png", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS para ocultar marcas y limpiar
+# CSS para ocultar marcas y limpiar la interfaz
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
             footer {visibility: hidden;}
             header {visibility: hidden;}
-            
-            /* Opcional: Si quieres ocultar totalmente la barra lateral, descomenta esto: */
-            /* [data-testid="stSidebar"] {display: none;} */
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# --- ESTRUCTURA PRINCIPAL (2 COLUMNAS) ---
-col_img, col_text = st.columns([1, 2], gap="large")
+# --- ESTRUCTURA PRINCIPAL ---
+# CAMBIO 1: Ajustamos la proporción a [1, 3] para que la columna de la imagen (izquierda)
+# sea más estrecha y, por tanto, la mascota se vea más pequeña.
+col_img, col_text = st.columns([1, 3], gap="large")
 
 with col_img:
-    # Tu mascota a la izquierda
     try:
         st.image("mascota.png", use_container_width=True)
     except:
-        st.warning("⚠️ Sube la imagen 'mascota.png' al repositorio.")
+        st.warning("⚠️ Falta 'mascota.png'")
 
 with col_text:
     st.title("Bienvenido al Campamento DeFi")
@@ -42,27 +40,48 @@ with col_text:
     
     st.write("") # Espacio separador
     
-    # --- MENÚ DE APPS INTEGRADO (Debajo del texto, junto a la mascota) ---
+    # --- MENÚ DE APPS INTEGRADO ---
+    # CAMBIO 2: Creamos 3 columnas en lugar de 2
+    c_loop, c_dca, c_pool = st.columns(3)
     
-    c_loop, c_dca = st.columns(2)
-    
+    # Columna 1: Looping
     with c_loop:
         with st.container(border=True):
             st.markdown("#### 🔄 Looping Master")
-            st.caption("Aave: Liquidaciones y Escáner de Salud.")
-            # ENLACE DE NAVEGACIÓN DIRECTO
-            # Asegúrate de que el nombre del archivo en 'pages/' coincide EXACTAMENTE
+            st.caption("Aave: Liquidaciones y Salud.")
             st.page_link("pages/01_🔄_Looping.py", label="Abrir Herramienta", icon="🚀", use_container_width=True)
             
+    # Columna 2: DCA
     with c_dca:
         with st.container(border=True):
             st.markdown("#### 💰 Simulador DCA")
-            st.caption("Bitcoin: Estrategia de Acumulación.")
-            # ENLACE DE NAVEGACIÓN DIRECTO
+            st.caption("Bitcoin: Estrategia Acumulación.")
             st.page_link("pages/02_💰_DCA_Bitcoin.py", label="Abrir Herramienta", icon="📈", use_container_width=True)
 
-    # Aviso de próximas herramientas
-    st.info("🚧 **Próximamente:** Calculadora de Impermanent Loss y Buscador de Yields.")
+    # Columna 3: Optimizador (NUEVA SECCIÓN)
+    with c_pool:
+        with st.container(border=True):
+            st.markdown("#### 💧 Optimizador Pools")
+            st.caption("Uniswap V3: Gestión de Liquidez.")
+            # CAMBIO 3: Enlace a la nueva página. 
+            # Asegúrate de crear el archivo en la carpeta 'pages' con este nombre o modifícalo aquí:
+            st.page_link("pages/03_💧_Optimizador_Pools.py", label="Abrir Herramienta", icon="🦄", use_container_width=True)
+
+    # Aviso de próximas herramientas (Actualizado)
+    st.write("")
+    st.info("🚧 **Próximamente:** Más cosicas buenas para ayudarte a tomar mejores decisiones.")
 
 st.divider()
-st.caption("© 2025 Campamento DeFi - Herramientas educativas. DYOR.")
+# ==============================================================================
+#  GLOBAL FOOTER (Pie de página común para todas las pestañas)
+# ==============================================================================
+st.divider()
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+        Desarrollado con ❤️ por <a href='https://lab.campamentodefi.com' target='_blank' style='text-decoration: none; color: #FF4B4B;'>Campamento DeFi</a>, 
+        el lugar de reunión de los seres <a href='https://link.soypepediaz.com/labinconfiscable' target='_blank' style='text-decoration: none; color: #FF4B4B;'>Inconfiscables</a>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
