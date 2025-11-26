@@ -215,6 +215,8 @@ def connect_robust(network_name):
             
     return None, None, False
 
+
+
 # ==============================================================================
 #  3. INTERFAZ DE USUARIO
 # ==============================================================================
@@ -651,7 +653,7 @@ with tab_sim:
     # Llamaremos a una función que contiene toda la lógica nueva
     # Para mantener el código limpio, es recomendable poner el código siguiente
     # dentro de esta sección o en una función separada.
-    
+
 def simulacion_seccion():
     
     # --- SECCIÓN 1: ABRIMOS LA POSICIÓN ---
@@ -991,7 +993,9 @@ def simulacion_seccion():
             resultado_en_tokens = resultado_total_usd / precio_final
             st.write(f"Resultado medido en tokens: **{resultado_en_tokens:.4f} {lbl_colateral}**")
 
-# --- PESTAÑA 3: BACKTEST DINÁMICO (ESTRATEGIA DE ACUMULACIÓN) ---
+simulacion_seccion()
+
+# --- PESTAÑA 4: BACKTEST DINÁMICO (ESTRATEGIA DE ACUMULACIÓN) ---
 with tab_dynamic_bt:
     st.markdown("### 🔄 Backtest Dinámico: 'Accumulator Mode'")
     st.info("""
