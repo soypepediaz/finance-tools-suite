@@ -219,9 +219,10 @@ def connect_robust(network_name):
 #  3. INTERFAZ DE USUARIO
 # ==============================================================================
 
-tab_home, tab_calc, tab_backtest, tab_dynamic_bt, tab_onchain = st.tabs([
+tab_home, tab_calc, tab_sim, tab_backtest, tab_dynamic_bt, tab_onchain = st.tabs([
     "🏠 Inicio", 
-    "🧮 Calculadora", 
+    "🧮 Calculadora",
+    "💻 Simulación",
     "📉 Backtest (HODL)", 
     "🔄 Backtest Dinámico", 
     "📡 Escáner Real"
@@ -643,6 +644,352 @@ with tab_backtest:
                     
             except Exception as e:
                 st.error(f"Error en el cálculo: {e}")
+
+# --- PESTAÑA 3: Simulador de Apalancamiento y Gestión de Riesgo ---
+with tab_sim:
+    st.header("Simulador de Apalancamiento y Gestión de Riesgo")
+    # Llamaremos a una función que contiene toda la lógica nueva
+    # Para mantener el código limpio, es recomendable poner el código siguiente
+    # dentro de esta sección o en una función separada.
+    
+def simulacion_seccion():
+    
+    # --- SECCIÓN 1: ABRIMOS LA POSICIÓN ---
+    st.subheader("1. Configuración de Apertura de Posición")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        tipo_posicion = st.radio("¿Qué estrategia quieres realizar?", ["Largo (Long)", "Corto (Short)"], horizontal=True)
+        inversion_usdc = st.number_input("Inversión inicial (USDC)", min_value=0.0, value=1000.0, step=100.0)
+        
+        # Definición de activos según la posición
+        if "Largo" in tipo_posicion:
+            lbl_precio = "Precio actual del Activo Volátil (ej. BTC)"
+            lbl_colateral = "Activo Volátil"
+            lbl_deuda = "USDC"
+        else:
+            lbl_precio = "Precio actual del Activo Volátil (a tomar prestado)"
+            lbl_colateral = "USDC"
+            lbl_deuda = "Activo Volátil"
+            
+        precio_activo_inicial = st.number_input(lbl_precio, min_value=0.0001, value=65000.0, step=10.0)
+
+    with col2:
+        ltv_liquidacion = st.slider("LTV de Liquidación del Protocolo (%)", 0, 100, 78) / 100
+        umbral_defensa = st.slider("Umbral de defensa (%)", 5, 25, 10) / 100
+        borrow_rate = st.slider("Borrow Rate (APY - Interés Anual) (%)", 0, 30, 5) / 100
+
+    st.markdown("---")
+    st.markdown("**Nivel de Apalancamiento**")
+    
+    c_lev1, c_lev2, c_lev3 = st.columns(3)
+    
+    with c_lev1:
+        modo_apalancamiento = st.radio("Modo de selección:", ["Multiplicador (x)", "Cantidad de Deuda"], horizontal=True)
+    
+    with c_lev2:
+        # Cálculo preliminar de colateral base
+        colateral_base_qty = 0
+        colateral_base_usd = 0
+        
+        if "Largo" in tipo_posicion:
+            colateral_base_usd = inversion_usdc
+            colateral_base_qty = inversion_usdc / precio_activo_inicial
+        else:
+            colateral_base_usd = inversion_usdc
+            colateral_base_qty = inversion_usdc # Son USDC
+            
+        deuda_solicitada_usd = 0
+        
+        if modo_apalancamiento == "Multiplicador (x)":
+            multiplicador = st.number_input("Selecciona apalancamiento (1x = sin deuda)", 1.0, 10.0, 1.5, 0.1)
+            # Deuda = Inversión * (Mult - 1). 
+            # Ojo: En Long con looping, Lev = Colateral / Equity.
+            # Simplificación: Deuda a tomar prestada.
+            if multiplicador > 1:
+                deuda_solicitada_usd = inversion_usdc * (multiplicador - 1)
+        else:
+            # Límite máximo teórico simple para el input (aunque el protocolo limita por LTV)
+            max_borrow = inversion_usdc * 10 
+            deuda_input = st.number_input(f"Cantidad de deuda en {lbl_deuda}", 0.0, max_borrow, 0.0)
+            if "Largo" in tipo_posicion:
+                deuda_solicitada_usd = deuda_input # Ya está en USDC
+            else:
+                deuda_solicitada_usd = deuda_input * precio_activo_inicial
+
+    with c_lev3:
+        hacer_looping = st.checkbox("¿Hacer Looping?", value=True, help="Si marcas esto, la deuda se usa para comprar más colateral (Largo) o se vende para aumentar colateral estable (Corto).")
+
+    # --- CÁLCULOS INICIALES ---
+    
+    # 1. Determinar Colateral Final y Deuda Final
+    collateral_final_qty = colateral_base_qty
+    deuda_final_qty = 0 # En unidades del activo deuda
+    
+    if hacer_looping:
+        if "Largo" in tipo_posicion:
+            # Tomamos prestado USDC, compramos Volátil y añadimos al colateral
+            qty_extra = deuda_solicitada_usd / precio_activo_inicial
+            collateral_final_qty += qty_extra
+            deuda_final_qty = deuda_solicitada_usd # Deuda en USDC
+        else:
+            # Short: Tomamos prestado Volátil, vendemos por USDC y añadimos al colateral
+            deuda_qty_token = deuda_solicitada_usd / precio_activo_inicial
+            collateral_final_qty += deuda_solicitada_usd # Colateral es USDC
+            deuda_final_qty = deuda_qty_token # Deuda es Token Volátil
+    else:
+        # Sin Looping (La deuda se queda "fuera" o en wallet, pero cuenta como pasivo contra el colateral inicial)
+        if "Largo" in tipo_posicion:
+            deuda_final_qty = deuda_solicitada_usd
+        else:
+            deuda_final_qty = deuda_solicitada_usd / precio_activo_inicial
+
+    # Valores en USD para cálculos de riesgo
+    valor_colateral_usd = 0
+    valor_deuda_usd = 0
+    
+    if "Largo" in tipo_posicion:
+        valor_colateral_usd = collateral_final_qty * precio_activo_inicial
+        valor_deuda_usd = deuda_final_qty # Es USDC
+    else:
+        valor_colateral_usd = collateral_final_qty # Es USDC
+        valor_deuda_usd = deuda_final_qty * precio_activo_inicial
+
+    # Health Factor y Precio Liquidación
+    # HF = (Colateral_USD * LTV_Liq) / Deuda_USD
+    hf_inicial = 999.0
+    precio_liquidacion = 0.0
+    
+    if valor_deuda_usd > 0:
+        hf_inicial = (valor_colateral_usd * ltv_liquidacion) / valor_deuda_usd
+        
+        if "Largo" in tipo_posicion:
+            # Liq Price: Cuando (Colateral_qty * P * LTV) = Deuda
+            # P = Deuda / (Colateral_qty * LTV)
+            precio_liquidacion = deuda_final_qty / (collateral_final_qty * ltv_liquidacion)
+        else:
+            # Short: Cuando (Colateral_USD * LTV) = (Deuda_qty * P)
+            # P = (Colateral_USD * LTV) / Deuda_qty
+            precio_liquidacion = (valor_colateral_usd * ltv_liquidacion) / deuda_final_qty
+    
+    # Precio Defensa
+    precio_defensa = 0.0
+    if "Largo" in tipo_posicion:
+        precio_defensa = precio_liquidacion * (1 + umbral_defensa)
+    else:
+        precio_defensa = precio_liquidacion * (1 - umbral_defensa)
+
+    # Validar riesgo inicial
+    if valor_deuda_usd > 0 and hf_inicial < 1.0:
+        st.error(f"⚠️ ¡Cuidado! Con estos parámetros naces liquidado. HF: {hf_inicial:.2f}")
+
+    # --- MOSTRAR DATOS SECCIÓN 1 ---
+    st.info("📊 **Resumen de Apertura**")
+    col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+    col_res1.metric("Colateral Inicial (USD)", f"${colateral_base_usd:,.2f}")
+    col_res2.metric("Colateral Final (USD)", f"${valor_colateral_usd:,.2f}", delta=f"{valor_colateral_usd-colateral_base_usd:,.2f} USD" if hacer_looping else None)
+    col_res3.metric("Deuda Total (USD)", f"${valor_deuda_usd:,.2f}")
+    col_res4.metric("Health Factor", f"{hf_inicial:.2f}")
+    
+    col_res5, col_res6 = st.columns(2)
+    col_res5.metric("Precio Liquidación", f"${precio_liquidacion:,.2f}")
+    col_res6.metric("Precio Primera Defensa", f"${precio_defensa:,.2f}", help="Nivel donde deberías actuar.")
+
+    # --- SECCIÓN 2: DESARROLLO DE LA POSICIÓN ---
+    st.markdown("---")
+    st.subheader("2. Desarrollo de la Posición (Intermedio)")
+    
+    st.write("Simula qué pasa si el precio cambia y pasan los días.")
+    
+    c_dev1, c_dev2, c_dev3 = st.columns(3)
+    with c_dev1:
+        precio_intermedio = st.number_input("Precio intermedio del Activo Volátil", value=precio_activo_inicial, step=100.0)
+    with c_dev2:
+        dias_pasados = st.number_input("Días transcurridos", min_value=0, value=30, step=1)
+    
+    # Cálculo de intereses
+    # Interés simple aproximado sobre el principal de la deuda
+    # Deuda * (Rate * Dias / 365)
+    interes_generado_token = 0
+    interes_generado_usd = 0
+    
+    if "Largo" in tipo_posicion:
+        # Deuda es USDC
+        interes_generado_usd = deuda_final_qty * (borrow_rate * dias_pasados / 365)
+        deuda_total_actual_token = deuda_final_qty + interes_generado_usd # Sigue siendo USDC
+        # Valoración actual
+        valor_colateral_actual_usd = collateral_final_qty * precio_intermedio
+        valor_deuda_actual_usd = deuda_total_actual_token
+    else:
+        # Deuda es Token
+        interes_generado_token = deuda_final_qty * (borrow_rate * dias_pasados / 365)
+        deuda_total_actual_token = deuda_final_qty + interes_generado_token # Token Volátil
+        interes_generado_usd = interes_generado_token * precio_intermedio
+        # Valoración actual
+        valor_colateral_actual_usd = collateral_final_qty # USDC
+        valor_deuda_actual_usd = deuda_total_actual_token * precio_intermedio
+
+    # PnL Latente (Unrealized) en este momento si cerramos todo
+    equity_actual_usd = valor_colateral_actual_usd - valor_deuda_actual_usd
+    pnl_usd = equity_actual_usd - inversion_usdc
+    pnl_pct = (pnl_usd / inversion_usdc) * 100 if inversion_usdc > 0 else 0
+
+    col_res_int1, col_res_int2, col_res_int3 = st.columns(3)
+    col_res_int1.metric("Intereses Generados (USD)", f"-${interes_generado_usd:,.2f}")
+    col_res_int2.metric("Valor Neto Actual (Equity)", f"${equity_actual_usd:,.2f}")
+    col_res_int3.metric("PnL Latente (Si cierras hoy)", f"${pnl_usd:,.2f} ({pnl_pct:.2f}%)", delta_color="normal")
+
+    # Lógica de cierre / repago
+    st.markdown("**Acciones sobre la posición**")
+    accion = st.radio("Elige una acción:", ["Mantener posición", "Cerrar Íntegramente", "Cerrar Parcialmente"], horizontal=True)
+
+    # Variables de estado para la Sección 3
+    colateral_remanente_qty = collateral_final_qty
+    deuda_remanente_token = deuda_final_qty # Sin contar intereses para la logica simple, o sumando? 
+    # Lo correcto: La deuda crece con intereses. El remanente debe incluir intereses capitalizados o pendientes.
+    # Asumiremos que los intereses se suman al principal de la deuda (compound o debt balance grow)
+    deuda_remanente_token = deuda_total_actual_token 
+    
+    dinero_en_wallet_usado = 0.0
+    colateral_vendido_qty = 0.0
+    deuda_pagada_token = 0.0
+    coste_realizado_usd = 0.0 # Perdida o ganancia ya materializada al cerrar
+    
+    if accion == "Cerrar Íntegramente":
+        metodo_pago = st.radio("¿Cómo quieres pagar la deuda?", ["Vender Colateral", "Usar Wallet (USDC Externo)"])
+        
+        if metodo_pago == "Vender Colateral":
+            # Se vende suficiente colateral para pagar la deuda total
+            if "Largo" in tipo_posicion:
+                # Vendo (DeudaUSD / Precio) cantidad de token
+                colateral_necesario = deuda_total_actual_token / precio_intermedio
+                if colateral_necesario > collateral_final_qty:
+                    st.error("❌ Insolvente: No tienes suficiente colateral para pagar la deuda.")
+                else:
+                    remanente_colateral = collateral_final_qty - colateral_necesario
+                    valor_remanente = remanente_colateral * precio_intermedio
+                    st.success(f"Has vendido {colateral_necesario:.4f} {lbl_colateral} para pagar la deuda.")
+                    st.write(f"Te quedan **{remanente_colateral:.4f} {lbl_colateral}** valorados en **${valor_remanente:,.2f}**.")
+                    st.write(f"Resultado final: **{pnl_usd:,.2f} USD** ({pnl_pct:.2f}%).")
+            else:
+                # Short: Colateral es USDC. Pago deuda comprando Token con Colateral.
+                coste_compra_token = deuda_total_actual_token * precio_intermedio
+                if coste_compra_token > collateral_final_qty:
+                    st.error("❌ Insolvente.")
+                else:
+                    remanente_usdc = collateral_final_qty - coste_compra_token
+                    st.success(f"Has usado ${coste_compra_token:,.2f} de tu colateral para recomprar el token y cerrar.")
+                    st.write(f"Te quedan **${remanente_usdc:,.2f} USDC**.")
+                    st.write(f"Resultado final: **{pnl_usd:,.2f} USD** ({pnl_pct:.2f}%).")
+            
+            # Reset para sección 3
+            colateral_remanente_qty = 0
+            deuda_remanente_token = 0
+            
+        else: # Pagar con Wallet
+            st.warning("Nota: Al pagar con wallet, asumes la pérdida/ganancia de la deuda, pero te quedas con todo el colateral intacto.")
+            if "Largo" in tipo_posicion:
+                st.write(f"Pagas **${deuda_total_actual_token:,.2f}** de tu bolsillo.")
+                st.write(f"Liberas **{collateral_final_qty:.4f} {lbl_colateral}** (Valor actual: ${collateral_final_qty*precio_intermedio:,.2f}).")
+            else:
+                coste_recompra = deuda_total_actual_token * precio_intermedio
+                st.write(f"Pagas **${coste_recompra:,.2f}** para recomprar el token y cerrar.")
+                st.write(f"Recuperas tu colateral íntegro: **${collateral_final_qty:,.2f} USDC**.")
+            
+            # Reset para sección 3 (Posición cerrada, pero el activo colateral ahora es libre)
+            # Para efectos de 'Estrategia final', ya no hay deuda.
+            deuda_remanente_token = 0
+
+    elif accion == "Cerrar Parcialmente":
+        pct_repay = st.slider("Porcentaje de deuda a repagar (%)", 1, 99, 50) / 100
+        metodo_pago = st.radio("¿Fuente de fondos?", ["Vender Colateral", "Usar Wallet (USDC Externo)"], key="partial_pay")
+        
+        cant_a_pagar_token = deuda_total_actual_token * pct_repay
+        valor_a_pagar_usd = 0
+        
+        if "Largo" in tipo_posicion:
+            valor_a_pagar_usd = cant_a_pagar_token
+        else:
+            valor_a_pagar_usd = cant_a_pagar_token * precio_intermedio
+            
+        st.markdown(f"**Operación:** Vas a repagar {pct_repay*100}% de la deuda. Valor aprox: ${valor_a_pagar_usd:,.2f}.")
+        
+        if pnl_usd < 0:
+            st.warning("⚠️ Atención: Estás cerrando parte de la posición en pérdidas. Esto 'realiza' (hace efectiva) la pérdida proporcional.")
+
+        if metodo_pago == "Vender Colateral":
+            # Reducimos colateral para pagar deuda
+            if "Largo" in tipo_posicion:
+                colateral_a_vender = valor_a_pagar_usd / precio_intermedio
+                colateral_remanente_qty -= colateral_a_vender
+                deuda_remanente_token -= cant_a_pagar_token
+                st.write(f"Se vendieron {colateral_a_vender:.4f} {lbl_colateral}.")
+            else:
+                # Short: Usamos USDC colateral para comprar token deuda
+                colateral_remanente_qty -= valor_a_pagar_usd # USDC
+                deuda_remanente_token -= cant_a_pagar_token
+        else:
+            # Wallet: Colateral intacto, deuda baja, wallet baja
+            dinero_en_wallet_usado = valor_a_pagar_usd
+            deuda_remanente_token -= cant_a_pagar_token
+            # Aquí guardamos el "coste hundido" para el PnL final
+            coste_realizado_usd = valor_a_pagar_usd # Dinero que salió del bolsillo
+
+    # --- SECCIÓN 3: RESULTADO FINAL ---
+    st.markdown("---")
+    st.subheader("3. Proyección a Futuro (Cierre Final)")
+    
+    if deuda_remanente_token <= 0 and accion == "Cerrar Íntegramente":
+        st.success("La posición ya está cerrada. Ver resultados arriba.")
+    else:
+        precio_final = st.number_input(f"Precio futuro de cierre para {lbl_colateral if 'Largo' in tipo_posicion else 'Activo Deuda'}", value=precio_intermedio, step=100.0)
+        
+        # Cálculo final
+        # Valor del colateral remanente al precio final
+        valor_colateral_final_usd = 0
+        coste_cierre_deuda_final_usd = 0
+        
+        if "Largo" in tipo_posicion:
+            valor_colateral_final_usd = colateral_remanente_qty * precio_final
+            coste_cierre_deuda_final_usd = deuda_remanente_token # Deuda en USDC (asumiendo no más intereses desde punto 2 o simplificando)
+        else:
+            valor_colateral_final_usd = colateral_remanente_qty # USDC
+            coste_cierre_deuda_final_usd = deuda_remanente_token * precio_final
+            
+        # PnL Final = (Lo que me queda limpio) - (Lo que puse al inicio) - (Lo que pagué extra desde wallet)
+        equity_final = valor_colateral_final_usd - coste_cierre_deuda_final_usd
+        
+        # Ajuste por flujos de caja (Wallet)
+        # Si pagué con wallet en el paso intermedio, eso es dinero que "salió".
+        # Profit = (Equity Final al cerrar) - (Inversion Inicial) - (Dinero extra añadido desde Wallet)
+        
+        # Sin embargo, si pagué con wallet, reduje deuda sin tocar colateral.
+        # El equity final ya refleja esa deuda menor, pero debo restar el cash que inyecté.
+        
+        resultado_total_usd = equity_final - inversion_usdc - dinero_en_wallet_usado
+        roi_total = (resultado_total_usd / inversion_usdc) * 100
+        
+        st.write("---")
+        st.markdown(f"### Resultados Finales a precio ${precio_final:,.2f}")
+        
+        kpi1, kpi2, kpi3 = st.columns(3)
+        kpi1.metric("Valor Colateral Final", f"${valor_colateral_final_usd:,.2f}")
+        kpi2.metric("Deuda Restante a Pagar", f"${coste_cierre_deuda_final_usd:,.2f}")
+        kpi3.metric("Equity (Neto) Final", f"${equity_final:,.2f}")
+        
+        st.metric("Beneficio/Pérdida Total (PnL)", f"${resultado_total_usd:,.2f}", f"{roi_total:.2f}%")
+        
+        if resultado_total_usd < 0:
+            st.error(f"Pérdida total: {resultado_total_usd:.2f} USD. (Incluyendo pagos intermedios).")
+        else:
+            st.success(f"Ganancia total: {resultado_total_usd:.2f} USD.")
+
+        # Resultado en activo (Si el usuario quiere ver si ganó más monedas)
+        # Solo relevante si es Long
+        if "Largo" in tipo_posicion and precio_final > 0:
+            resultado_en_tokens = resultado_total_usd / precio_final
+            st.write(f"Resultado medido en tokens: **{resultado_en_tokens:.4f} {lbl_colateral}**")
 
 # --- PESTAÑA 3: BACKTEST DINÁMICO (ESTRATEGIA DE ACUMULACIÓN) ---
 with tab_dynamic_bt:
