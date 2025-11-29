@@ -304,3 +304,17 @@ elif st.session_state.step == 'lab':
                             }
                         )
                 else: st.error("Datos insuficientes.")
+
+# ==============================================================================
+#  GLOBAL FOOTER (Pie de página común para todas las pestañas)
+# ==============================================================================
+st.divider()
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+        Desarrollado con ❤️ por <a href='https://lab.campamentodefi.com' target='_blank' style='text-decoration: none; color: #FF4B4B;'>Campamento DeFi</a>, 
+        el lugar de reunión de los seres <a href='https://link.soypepediaz.com/labinconfiscable' target='_blank' style='text-decoration: none; color: #FF4B4B;'>Inconfiscables</a>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
