@@ -19,7 +19,7 @@ hide_st_style = """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
 # --- ESTRUCTURA PRINCIPAL ---
-# CAMBIO 1: Ajustamos la proporción a [1, 3] para que la columna de la imagen (izquierda)
+# Ajustamos la proporción a [1, 3] para que la columna de la imagen (izquierda)
 # sea más estrecha y, por tanto, la mascota se vea más pequeña.
 col_img, col_text = st.columns([1, 3], gap="large")
 
@@ -41,8 +41,8 @@ with col_text:
     st.write("") # Espacio separador
     
     # --- MENÚ DE APPS INTEGRADO ---
-    # CAMBIO 2: Creamos 3 columnas en lugar de 2
-    c_loop, c_dca, c_pool = st.columns(3)
+    # CAMBIO: Creamos 4 columnas para añadir la nueva herramienta
+    c_loop, c_dca, c_pool, c_hunter = st.columns(4)
     
     # Columna 1: Looping
     with c_loop:
@@ -58,16 +58,22 @@ with col_text:
             st.caption("Bitcoin: Estrategia Acumulación.")
             st.page_link("pages/02_💰_DCA_Bitcoin.py", label="Abrir Herramienta", icon="📈", use_container_width=True)
 
-    # Columna 3: Optimizador (NUEVA SECCIÓN)
+    # Columna 3: Optimizador Pools
     with c_pool:
         with st.container(border=True):
             st.markdown("#### 💧 Optimizador Pools")
             st.caption("Uniswap V3: Gestión de Liquidez.")
-            # CAMBIO 3: Enlace a la nueva página. 
-            # Asegúrate de crear el archivo en la carpeta 'pages' con este nombre o modifícalo aquí:
             st.page_link("pages/03_💧_Optimizador_Pools.py", label="Abrir Herramienta", icon="🦄", use_container_width=True)
 
-    # Aviso de próximas herramientas (Actualizado)
+    # Columna 4: Cazador de Pools (NUEVA)
+    with c_hunter:
+        with st.container(border=True):
+            st.markdown("#### 🏹 Cazador Pools")
+            st.caption("DeFi: Oportunidades de Yield.")
+            # Usamos link_button para URLs externas manteniendo la estética
+            st.link_button("Abrir Herramienta", url="https://lab.campamentodefi.com/Cazador_Pools", icon="🎯", use_container_width=True)
+
+    # Aviso de próximas herramientas
     st.write("")
     st.info("🚧 **Próximamente:** Más cosicas buenas para ayudarte a tomar mejores decisiones.")
 
@@ -75,7 +81,6 @@ st.divider()
 # ==============================================================================
 #  GLOBAL FOOTER (Pie de página común para todas las pestañas)
 # ==============================================================================
-st.divider()
 st.markdown(
     """
     <div style='text-align: center; color: #666;'>
