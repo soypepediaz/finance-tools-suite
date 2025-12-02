@@ -1,12 +1,21 @@
 import streamlit as st
+from auth_module import show_auth_interface
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Looping Master - Campamento DeFi",
+    page_title="Laboratorio - Campamento DeFi",
     page_icon="mascota.png", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- SECCIÓN DE AUTENTICACIÓN ---
+st.divider()
+st.header("🔐 Autenticación NFT")
+st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
+show_auth_interface()
+st.divider()
+
 
 # CSS para ocultar marcas y limpiar la interfaz
 hide_st_style = """
