@@ -9,14 +9,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- SECCIÓN DE AUTENTICACIÓN ---
-st.divider()
-st.header("🔐 Autenticación NFT")
-st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
-show_auth_interface()
-st.divider()
-
-
 # CSS para ocultar marcas y limpiar la interfaz
 hide_st_style = """
             <style>
@@ -87,6 +79,14 @@ st.write("")
 st.info("🚧 **Próximamente:** Más cosicas buenas para ayudarte a tomar mejores decisiones.")
 
 st.divider()
+
+# --- SECCIÓN DE AUTENTICACIÓN ---
+st.divider()
+st.header("🔐 Autenticación NFT")
+st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
+show_auth_interface()
+st.divider()
+
 # ==============================================================================
 #  GLOBAL FOOTER (Pie de página común para todas las pestañas)
 # ==============================================================================
