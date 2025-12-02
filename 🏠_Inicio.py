@@ -10,10 +10,7 @@ st.set_page_config(
 )
 
 # --- SECCIÓN DE AUTENTICACIÓN ---
-st.divider()
-st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
 show_auth_interface()
-st.divider()
 
 # CSS para ocultar marcas y limpiar la interfaz
 hide_st_style = """
