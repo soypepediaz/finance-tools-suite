@@ -1,7 +1,7 @@
 """
-Módulo de autenticación NFT mejorado para Streamlit
+Módulo de autenticación NFT minimalista para Streamlit
 Persiste la autenticación entre páginas usando el servidor FastAPI
-Diseño mejorado con layout en dos columnas
+Diseño minimalista una vez autenticado
 """
 
 import streamlit as st
@@ -14,7 +14,7 @@ from eth_account.messages import encode_defunct
 # --- CONFIGURACIÓN ---
 NFT_CONTRACT_ADDRESS = "0xF4820467171695F4d2760614C77503147A9CB1E8"
 ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc"
-FASTAPI_SERVER_URL = "https://privy-moralis-streamlit-production.up.railway.app"  # Cambiar a tu URL de Railway
+FASTAPI_SERVER_URL = "https://privy-moralis-streamlit-production.up.railway.app"
 
 # --- INICIALIZAR SESSION STATE ---
 def init_auth_session():
@@ -164,10 +164,10 @@ def require_nft_authentication():
     
     return True
 
-# --- INTERFAZ DE AUTENTICACIÓN CON DISEÑO EN DOS COLUMNAS ---
+# --- INTERFAZ DE AUTENTICACIÓN MINIMALISTA ---
 def show_auth_interface():
     """
-    Muestra la interfaz de autenticación con diseño en dos columnas
+    Muestra la interfaz de autenticación minimalista
     """
     init_auth_session()
     
@@ -176,30 +176,16 @@ def show_auth_interface():
         restore_auth_from_server()
     
     if st.session_state.authenticated:
-        # ========== USUARIO AUTENTICADO ==========
-        # Mostrar en dos columnas: Información de autenticación | Información del NFT
-        col1, col2 = st.columns(2)
+        # ========== USUARIO AUTENTICADO - VERSIÓN MINIMALISTA ==========
+        col1, col2 = st.columns([4, 1])
         
         with col1:
-            st.success("✅ Autenticación Verificada")
-            st.write(f"**Billetera:**")
-            st.code(st.session_state.user_wallet, language="")
-            st.caption("Dirección verificada mediante firma")
+            # Mostrar solo la dirección corta (primeros 6 y últimos 4 caracteres)
+            wallet_short = f"{st.session_state.user_wallet[:6]}...{st.session_state.user_wallet[-4:]}"
+            st.write(f"✅ **Autenticación Verificada para** `{wallet_short}`")
         
         with col2:
-            st.subheader("📜 Información del NFT Activo")
-            if st.session_state.user_nfts:
-                st.write(f"**Balance Activo:** {st.session_state.user_nfts.get('active_balance', 0)} NFT(s)")
-                st.write(f"**Contrato:**")
-                st.code(st.session_state.user_nfts.get('contract', 'N/A'), language="")
-                st.caption("💡 Solo se cuentan los NFTs que no han caducado")
-        
-        st.divider()
-        
-        # Botón de logout centrado
-        col_center = st.columns([1, 2, 1])
-        with col_center[1]:
-            if st.button("🚪 Cerrar Sesión", use_container_width=True):
+            if st.button("🚪 Cerrar", use_container_width=True):
                 clear_auth_on_server(st.session_state.user_wallet)
                 st.session_state.authenticated = False
                 st.session_state.user_wallet = None
@@ -208,7 +194,6 @@ def show_auth_interface():
     
     else:
         # ========== USUARIO NO AUTENTICADO ==========
-        # Mostrar en dos columnas: Paso 1 | Paso 2
         col1, col2 = st.columns(2)
         
         with col1:
