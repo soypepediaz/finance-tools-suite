@@ -208,7 +208,7 @@ def show_auth_interface():
             
             wallet_input = st.text_input(
                 "Dirección de billetera (0x...):",
-                placeholder="0x8dC2010C341F59c922e4028BaFb61AAA776A1F3C",
+                placeholder="Pega aquí la dirección 0x... dónde tienes el NFT de la Membresía",
                 label_visibility="collapsed"
             )
             
