@@ -11,7 +11,6 @@ st.set_page_config(
 
 # --- SECCIÓN DE AUTENTICACIÓN ---
 st.divider()
-st.header("🔐 Autenticación NFT")
 st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
 show_auth_interface()
 st.divider()
