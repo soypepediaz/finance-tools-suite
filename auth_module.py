@@ -1,6 +1,6 @@
 """
-Módulo de autenticación NFT reutilizable para Streamlit
-Este módulo proporciona funciones para verificar autenticación y NFT ownership
+Módulo de autenticación NFT mejorado para Streamlit
+Persiste la autenticación entre páginas usando el servidor FastAPI
 """
 
 import streamlit as st
@@ -100,6 +100,46 @@ def clear_auth_on_server(wallet_address):
     except:
         pass
 
+def restore_auth_from_server():
+    """
+    Restaurar autenticación desde el servidor FastAPI.
+    Esto se ejecuta en cada página para verificar si el usuario ya está autenticado.
+    """
+    init_auth_session()
+    
+    # Si ya está autenticado en esta sesión, no hacer nada
+    if st.session_state.authenticated:
+        return True
+    
+    # Intentar restaurar desde el servidor
+    # Buscar en todas las sesiones activas del servidor
+    try:
+        response = requests.get(
+            f"{FASTAPI_SERVER_URL}/api/debug/sessions",
+            timeout=5
+        )
+        if response.status_code == 200:
+            data = response.json()
+            sessions = data.get("sessions", [])
+            
+            # Si hay al menos una sesión activa, usar la primera
+            if sessions:
+                wallet_address = sessions[0]
+                auth_result = check_auth_on_server(wallet_address)
+                
+                if auth_result.get("authenticated"):
+                    # Verificar NFT
+                    has_active_nft, nfts = verify_nft_ownership(wallet_address)
+                    if has_active_nft:
+                        st.session_state.authenticated = True
+                        st.session_state.user_wallet = wallet_address
+                        st.session_state.user_nfts = nfts
+                        return True
+    except:
+        pass
+    
+    return False
+
 # --- FUNCIÓN DE PROTECCIÓN DE PÁGINA ---
 def require_nft_authentication():
     """
@@ -110,6 +150,10 @@ def require_nft_authentication():
     Retorna: True si el usuario está autenticado, False si no
     """
     init_auth_session()
+    
+    # Intentar restaurar autenticación desde el servidor
+    if not st.session_state.authenticated:
+        restore_auth_from_server()
     
     if not st.session_state.authenticated:
         st.error("❌ Acceso Denegado")
@@ -125,6 +169,10 @@ def show_auth_interface():
     Muestra la interfaz de autenticación (para usar en la página principal)
     """
     init_auth_session()
+    
+    # Intentar restaurar autenticación desde el servidor
+    if not st.session_state.authenticated:
+        restore_auth_from_server()
     
     if st.session_state.authenticated:
         # Usuario autenticado - mostrar información y botón de logout
