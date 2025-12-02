@@ -1,6 +1,7 @@
 """
 Módulo de autenticación NFT mejorado para Streamlit
 Persiste la autenticación entre páginas usando el servidor FastAPI
+Diseño mejorado con layout en dos columnas
 """
 
 import streamlit as st
@@ -13,7 +14,7 @@ from eth_account.messages import encode_defunct
 # --- CONFIGURACIÓN ---
 NFT_CONTRACT_ADDRESS = "0xF4820467171695F4d2760614C77503147A9CB1E8"
 ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc"
-FASTAPI_SERVER_URL = "https://privy-moralis-streamlit-production.up.railway.app"  # Cambiar a tu URL de Railway
+FASTAPI_SERVER_URL = "http://localhost:8000"  # Cambiar a tu URL de Railway
 
 # --- INICIALIZAR SESSION STATE ---
 def init_auth_session():
@@ -163,10 +164,10 @@ def require_nft_authentication():
     
     return True
 
-# --- INTERFAZ DE AUTENTICACIÓN ---
+# --- INTERFAZ DE AUTENTICACIÓN CON DISEÑO EN DOS COLUMNAS ---
 def show_auth_interface():
     """
-    Muestra la interfaz de autenticación (para usar en la página principal)
+    Muestra la interfaz de autenticación con diseño en dos columnas
     """
     init_auth_session()
     
@@ -175,72 +176,86 @@ def show_auth_interface():
         restore_auth_from_server()
     
     if st.session_state.authenticated:
-        # Usuario autenticado - mostrar información y botón de logout
-        st.success("✅ ¡Autenticación y verificación completadas! Bienvenido.")
-        st.balloons()
+        # ========== USUARIO AUTENTICADO ==========
+        # Mostrar en dos columnas: Información de autenticación | Información del NFT
+        col1, col2 = st.columns(2)
         
-        st.info(f"Billetera conectada: `{st.session_state.user_wallet}`")
+        with col1:
+            st.success("✅ Autenticación Verificada")
+            st.write(f"**Billetera:**")
+            st.code(st.session_state.user_wallet, language="")
+            st.caption("Dirección verificada mediante firma")
         
-        if st.session_state.user_nfts:
+        with col2:
             st.subheader("📜 Información del NFT Activo")
-            st.write(f"**Balance Activo:** {st.session_state.user_nfts.get('active_balance', 0)} NFT(s) activo(s)")
-            st.write(f"**Contrato:** `{st.session_state.user_nfts.get('contract', 'N/A')}`")
-            st.caption("💡 Solo se cuentan los NFTs que no han caducado")
-        
-        if st.button("🚪 Cerrar Sesión"):
-            clear_auth_on_server(st.session_state.user_wallet)
-            st.session_state.authenticated = False
-            st.session_state.user_wallet = None
-            st.session_state.user_nfts = None
-            st.rerun()
-    else:
-        # Usuario no autenticado - mostrar interfaz de login
-        st.subheader("Paso 1: Conecta tu Billetera")
-        st.caption("Haz clic en el botón para abrir la ventana de autenticación.")
-        
-        st.link_button("🔗 Conectar Billetera", f"{FASTAPI_SERVER_URL}")
-        
-        st.info("Después de autenticarte, vuelve a esta página y pega tu dirección de billetera en el campo de abajo.")
+            if st.session_state.user_nfts:
+                st.write(f"**Balance Activo:** {st.session_state.user_nfts.get('active_balance', 0)} NFT(s)")
+                st.write(f"**Contrato:**")
+                st.code(st.session_state.user_nfts.get('contract', 'N/A'), language="")
+                st.caption("💡 Solo se cuentan los NFTs que no han caducado")
         
         st.divider()
-        st.subheader("Paso 2: Verifica tu Autenticación")
-        st.caption("Pega tu dirección de billetera después de autenticarte:")
         
-        wallet_input = st.text_input("Dirección de billetera (0x...):")
+        # Botón de logout centrado
+        col_center = st.columns([1, 2, 1])
+        with col_center[1]:
+            if st.button("🚪 Cerrar Sesión", use_container_width=True):
+                clear_auth_on_server(st.session_state.user_wallet)
+                st.session_state.authenticated = False
+                st.session_state.user_wallet = None
+                st.session_state.user_nfts = None
+                st.rerun()
+    
+    else:
+        # ========== USUARIO NO AUTENTICADO ==========
+        # Mostrar en dos columnas: Paso 1 | Paso 2
+        col1, col2 = st.columns(2)
         
-        if wallet_input:
-            if not wallet_input.startswith("0x") or len(wallet_input) != 42:
-                st.error("❌ Dirección inválida. Debe empezar con 0x y tener 42 caracteres.")
-            else:
-                with st.spinner("🔍 Verificando autenticación y NFT activo..."):
-                    auth_result = check_auth_on_server(wallet_input)
-                    
-                    if auth_result.get("authenticated"):
-                        wallet_address = auth_result.get("wallet")
-                        signature = auth_result.get("signature")
-                        message = auth_result.get("message")
-                        
-                        if verify_signature(wallet_address, message, signature):
-                            st.success(f"✅ Firma verificada. Billetera: `{wallet_address}`")
+        with col1:
+            st.subheader("Paso 1️⃣: Conecta tu Billetera")
+            st.write("Haz clic en el botón para abrir la ventana de autenticación.")
+            st.link_button("🔗 Conectar Billetera", f"{FASTAPI_SERVER_URL}", use_container_width=True)
+            st.caption("Se abrirá una ventana emergente para conectar tu billetera Web3")
+        
+        with col2:
+            st.subheader("Paso 2️⃣: Verifica tu Autenticación")
+            st.write("Pega tu dirección de billetera después de autenticarte:")
+            
+            wallet_input = st.text_input(
+                "Dirección de billetera (0x...):",
+                placeholder="0x8dC2010C341F59c922e4028BaFb61AAA776A1F3C",
+                label_visibility="collapsed"
+            )
+            
+            if wallet_input:
+                if not wallet_input.startswith("0x") or len(wallet_input) != 42:
+                    st.error("❌ Dirección inválida. Debe empezar con 0x y tener 42 caracteres.")
+                else:
+                    if st.button("✅ Verificar", use_container_width=True):
+                        with st.spinner("🔍 Verificando autenticación y NFT activo..."):
+                            auth_result = check_auth_on_server(wallet_input)
                             
-                            has_active_nft, nfts = verify_nft_ownership(wallet_address)
-                            if has_active_nft:
-                                st.session_state.authenticated = True
-                                st.session_state.user_wallet = wallet_address
-                                st.session_state.user_nfts = nfts
-                                st.success("✅ ¡NFT activo verificado! Acceso concedido.")
-                                st.balloons()
-                                time.sleep(1)
-                                st.rerun()
+                            if auth_result.get("authenticated"):
+                                wallet_address = auth_result.get("wallet")
+                                signature = auth_result.get("signature")
+                                message = auth_result.get("message")
+                                
+                                if verify_signature(wallet_address, message, signature):
+                                    has_active_nft, nfts = verify_nft_ownership(wallet_address)
+                                    if has_active_nft:
+                                        st.session_state.authenticated = True
+                                        st.session_state.user_wallet = wallet_address
+                                        st.session_state.user_nfts = nfts
+                                        st.success("✅ ¡NFT activo verificado! Acceso concedido.")
+                                        st.balloons()
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ No tienes un NFT ACTIVO")
+                                        st.warning("La billetera conectada no posee un NFT activo en Arbitrum.")
+                                        st.info("💡 Solo se concede acceso si tienes al menos 1 NFT activo (no caducado).")
+                                else:
+                                    st.error("❌ La firma no es válida")
                             else:
-                                st.warning("❌ Acceso Denegado")
-                                st.error("La billetera conectada no posee un NFT ACTIVO en Arbitrum.")
-                                st.info("💡 Nota: Solo se concede acceso si tienes al menos 1 NFT activo (no caducado).")
-                                st.info(f"Contrato requerido: `{NFT_CONTRACT_ADDRESS}`")
-                                st.info(f"Red: Arbitrum")
-                        else:
-                            st.error("❌ La firma no es válida")
-                    else:
-                        st.warning("⚠️ No se encontraron datos de autenticación para esta billetera.")
-                        st.info("Asegúrate de haber completado el proceso de autenticación en la ventana emergente.")
-                        st.info("Si ya completaste el proceso, intenta pegar tu dirección de nuevo.")
+                                st.warning("⚠️ No se encontraron datos")
+                                st.info("Asegúrate de haber completado el proceso de autenticación en la ventana emergente.")
