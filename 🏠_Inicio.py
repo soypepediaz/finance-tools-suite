@@ -36,8 +36,15 @@ with col_text:
     st.markdown("""
     Aquí tienes las herramientas profesionales diseñadas para gestionar tu riesgo y optimizar tus rendimientos.
     
-    **Selecciona una herramienta para empezar:**
+    **Antes de nada, tendrás que verificar tu NFT:**
     """)
+    
+# --- SECCIÓN DE AUTENTICACIÓN ---
+st.divider()
+st.header("🔐 Autenticación NFT")
+st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
+show_auth_interface()
+st.divider()
 
 st.write("") # Espacio separador vertical
 
@@ -78,13 +85,6 @@ with c_hunter:
 st.write("")
 st.info("🚧 **Próximamente:** Más cosicas buenas para ayudarte a tomar mejores decisiones.")
 
-st.divider()
-
-# --- SECCIÓN DE AUTENTICACIÓN ---
-st.divider()
-st.header("🔐 Autenticación NFT")
-st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
-show_auth_interface()
 st.divider()
 
 # ==============================================================================
