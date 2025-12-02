@@ -9,6 +9,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- SECCIÓN DE AUTENTICACIÓN ---
+st.divider()
+st.header("🔐 Autenticación NFT")
+st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
+show_auth_interface()
+st.divider()
+
 # CSS para ocultar marcas y limpiar la interfaz
 hide_st_style = """
             <style>
@@ -38,13 +45,6 @@ with col_text:
     
     **Antes de nada, tendrás que verificar tu NFT:**
     """)
-    
-# --- SECCIÓN DE AUTENTICACIÓN ---
-st.divider()
-st.header("🔐 Autenticación NFT")
-st.write("Conecta tu billetera para acceder a todas las herramientas exclusivas.")
-show_auth_interface()
-st.divider()
 
 st.write("") # Espacio separador vertical
 
