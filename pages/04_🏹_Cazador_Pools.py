@@ -4,6 +4,10 @@ import plotly.express as px
 from uni_v3_kit.analyzer import MarketScanner
 from uni_v3_kit.data_provider import DataProvider
 from uni_v3_kit.backtester import Backtester
+from auth_module import require_nft_authentication
+
+# Verificar autenticación
+require_nft_authentication()
 
 st.set_page_config(page_title="Cazador V3 Lab", layout="wide", initial_sidebar_state="collapsed")
 
