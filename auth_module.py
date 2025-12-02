@@ -199,7 +199,7 @@ def show_auth_interface():
         with col1:
             st.subheader("Paso 1️⃣: Conecta tu Billetera")
             st.write("Haz clic en el botón para abrir la ventana de autenticación.")
-            st.link_button("🔗 Conectar Billetera", f"{FASTAPI_SERVER_URL}", use_container_width=True)
+            st.link_button("🔗 Conectar Billetera dónde tengas el NFT", f"{FASTAPI_SERVER_URL}", use_container_width=True)
             st.caption("Se abrirá una ventana emergente para conectar tu billetera Web3")
         
         with col2:
