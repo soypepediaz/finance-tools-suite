@@ -14,7 +14,7 @@ from eth_account.messages import encode_defunct
 # --- CONFIGURACIÓN ---
 NFT_CONTRACT_ADDRESS = "0xF4820467171695F4d2760614C77503147A9CB1E8"
 ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc"
-FASTAPI_SERVER_URL = "http://localhost:8000"  # Cambiar a tu URL de Railway
+FASTAPI_SERVER_URL = "https://privy-moralis-streamlit-production.up.railway.app"  # Cambiar a tu URL de Railway
 
 # --- INICIALIZAR SESSION STATE ---
 def init_auth_session():
