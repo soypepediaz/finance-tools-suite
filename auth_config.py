@@ -10,7 +10,7 @@ ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc"
 
 # --- CONFIGURACIÓN DEL SERVIDOR FASTAPI ---
 # IMPORTANTE: Cambiar esto a tu URL de Railway cuando despliegues
-FASTAPI_SERVER_URL = "https://privy-moralis-streamlit-production.up.railway.app"
+FASTAPI_SERVER_URL = "https://nft.campamentodefi.com"
 
 # Para Railway, sería algo como:
 # FASTAPI_SERVER_URL = "https://tu-proyecto-railway.up.railway.app"
