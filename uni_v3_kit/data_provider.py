@@ -31,15 +31,22 @@ class DataProvider:
             return []
 
     def get_pool_history(self, pool_address):
-        """API 2: Devuelve el OBJETO COMPLETO del pool (info + history)"""
-        endpoint = f"{self.base_url}/pool/history"
-        params = {"id": pool_address}
+        """
+        API 2: Devuelve el OBJETO COMPLETO del pool (info + history)
+        Actualizado para usar la ruta: /pools/{address}/history
+        """
+        # CAMBIO REALIZADO AQUÍ: Inyectamos la address en la URL
+        endpoint = f"{self.base_url}/pools/{pool_address}/history"
+        
         try:
-            response = requests.get(endpoint, params=params, headers=self.headers)
+            # Ya no necesitamos pasar 'params={"id":...}'
+            response = requests.get(endpoint, headers=self.headers)
             data = response.json()
-            # Devolvemos todo el objeto 'pool', no solo 'history', para acceder a poolName
+            
+            # Mantenemos la lógica de extracción original
             if "pool" in data and data["pool"]:
                 return data["pool"]
             return {}
-        except:
+        except Exception as e:
+            print(f"Error obteniendo historial del pool {pool_address}: {e}")
             return {}
